@@ -1,12 +1,20 @@
 import { useRouter } from "expo-router";
 import React, { useEffect } from "react";
-import { Alert, Pressable, SafeAreaView, Text, View } from "react-native";
+import {
+  Alert,
+  Pressable,
+  SafeAreaView,
+  Text,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { useEsp32 } from "../src/api/useEsp32";
 
 type Action = { label: string; onPress: () => Promise<void> | void };
 
 export default function Index() {
   const router = useRouter();
+  const { height } = useWindowDimensions();
   const {
     status,
     error,
@@ -24,6 +32,8 @@ export default function Index() {
   useEffect(() => {
     if (error) Alert.alert("ESP32", error);
   }, [error]);
+
+  const compact = height < 760;
 
   const trackingLabel = status?.tracking ? "Stop Tracking" : "Start Tracking";
 
@@ -43,7 +53,6 @@ export default function Index() {
     {
       label: "Manual",
       onPress: async () => {
-        // Put ESP32 in manual mode first
         await apiSetMode("manual");
         router.push("/manual");
       },
@@ -52,39 +61,37 @@ export default function Index() {
 
   return (
     <SafeAreaView className="flex-1 bg-star-bg">
-      <View className="flex-1 items-center px-6">
-        <View className="pt-14">
-          <Text className="text-star-text text-[72px] font-light tracking-[0.28em]">
-            S.T.A.R.
-          </Text>
-        </View>
+      <View className="flex-1 items-center px-5" style={{ paddingTop: compact ? 20 : 44 }}>
+        <Text
+          className="text-star-text font-light tracking-[0.28em]"
+          style={{ fontSize: compact ? 52 : 72 }}
+        >
+          S.T.A.R.
+        </Text>
 
-        {/* Simple status line */}
-        <View className="mt-2 items-center">
+        <View className="items-center" style={{ marginTop: compact ? 4 : 8 }}>
           <Text className="text-star-text opacity-70">
-            Mode: {status?.mode ?? "—"} • Tracking:{" "}
-            {status?.tracking ? "ON" : "OFF"}
+            Mode: {status?.mode ?? "—"} • Tracking: {status?.tracking ? "ON" : "OFF"}
           </Text>
         </View>
 
-        <View className="mt-16 w-full max-w-[420px] gap-8">
+        <View className="w-full max-w-[420px]" style={{ marginTop: compact ? 28 : 64, gap: compact ? 12 : 24 }}>
           {actions.map((a) => (
             <Pressable
               key={a.label}
               onPress={a.onPress}
-              className="h-20 w-full items-center justify-center rounded-pill bg-star-button"
+              className="w-full items-center justify-center rounded-pill bg-star-button"
+              style={{ height: compact ? 58 : 80 }}
             >
-              <Text className="text-[22px] font-normal text-star-buttonText">
+              <Text className="font-normal text-star-buttonText" style={{ fontSize: compact ? 18 : 22 }}>
                 {a.label}
               </Text>
             </Pressable>
           ))}
         </View>
 
-        <Pressable onPress={refresh} className="mt-10">
-          <Text className="text-star-text opacity-60">
-            Tap to refresh status
-          </Text>
+        <Pressable onPress={refresh} style={{ marginTop: compact ? 20 : 40 }}>
+          <Text className="text-star-text opacity-60">Tap to refresh status</Text>
         </Pressable>
       </View>
     </SafeAreaView>
