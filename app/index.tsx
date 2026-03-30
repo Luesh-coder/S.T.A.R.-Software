@@ -52,37 +52,33 @@ export default function Index() {
 
   return (
     <SafeAreaView className="flex-1 bg-star-bg">
-      <View className="flex-1 items-center px-6">
-        <View className="pt-14">
-          <Text className="text-star-text text-[72px] font-light tracking-[0.28em]">
+      <View className="flex-1 items-center justify-evenly px-6">
+        <View className="items-center">
+          <Text className="text-star-text text-[42px] font-light tracking-[0.28em]">
             S.T.A.R.
           </Text>
-        </View>
-
-        {/* Simple status line */}
-        <View className="mt-2 items-center">
-          <Text className="text-star-text opacity-70">
+          <Text className="text-star-text text-xs opacity-70 mt-2">
             Mode: {status?.mode ?? "—"} • Tracking:{" "}
             {status?.tracking ? "ON" : "OFF"}
           </Text>
         </View>
 
-        <View className="mt-16 w-full max-w-[420px] gap-8">
+        <View className="w-full max-w-[420px] gap-5">
           {actions.map((a) => (
             <Pressable
               key={a.label}
               onPress={a.onPress}
-              className="h-20 w-full items-center justify-center rounded-pill bg-star-button"
+              className="h-14 w-full items-center justify-center rounded-pill bg-star-button"
             >
-              <Text className="text-[22px] font-normal text-star-buttonText">
+              <Text className="text-[18px] font-normal text-star-buttonText">
                 {a.label}
               </Text>
             </Pressable>
           ))}
         </View>
 
-        <Pressable onPress={refresh} className="mt-10">
-          <Text className="text-star-text opacity-60">
+        <Pressable onPress={refresh}>
+          <Text className="text-star-text text-xs opacity-60">
             Tap to refresh status
           </Text>
         </Pressable>
