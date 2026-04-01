@@ -1,31 +1,40 @@
-import { makeBaseUrl } from "./config";
+import { apiLog, HTTP_TIMEOUT_MS, makeBaseUrl } from "./config";
 import { ApiErr } from "./types";
 
-type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
-function timeoutSignal(ms: number) {
+// ─── Timeout Helper ───────────────────────────────────────────────────────────
+
+function makeAbortSignal(ms: number): { signal: AbortSignal; cancel: () => void } {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), ms);
   return { signal: controller.signal, cancel: () => clearTimeout(id) };
 }
 
+// ─── Core Fetch Wrapper ───────────────────────────────────────────────────────
+
+/**
+ * Send a JSON HTTP request to the ESP32 and return the parsed response.
+ * Returns an ApiErr object on network failure, timeout, or non-2xx status.
+ */
 export async function httpJson<T>(
   host: string,
   path: string,
   method: HttpMethod,
   body?: unknown,
-  timeoutMs = 2500,
+  timeoutMs = HTTP_TIMEOUT_MS,
 ): Promise<T | ApiErr> {
-  const base = makeBaseUrl(host);
-  const url = `${base}${path}`;
+  const url = `${makeBaseUrl(host)}${path}`;
 
-  const { signal, cancel } = timeoutSignal(timeoutMs);
+  apiLog(`→ ${method} ${url}`, body !== undefined ? body : "");
+
+  const { signal, cancel } = makeAbortSignal(timeoutMs);
 
   try {
     const res = await fetch(url, {
       method,
       headers: { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
       signal,
     });
 
@@ -33,18 +42,19 @@ export async function httpJson<T>(
     const data = text ? JSON.parse(text) : null;
 
     if (!res.ok) {
-      return {
-        ok: false,
-        error: `HTTP ${res.status}: ${data?.error ?? text ?? "Request failed"}`,
-      };
+      const errMsg = `HTTP ${res.status}: ${data?.error ?? text ?? "Request failed"}`;
+      apiLog(`← ERROR ${url}:`, errMsg);
+      return { ok: false, error: errMsg };
     }
 
+    apiLog(`← OK ${url}:`, data);
     return data as T;
   } catch (e: any) {
     const msg =
       e?.name === "AbortError"
-        ? "Request timed out (ESP32 not reachable)"
+        ? `Request timed out — ESP32 not reachable at ${host}`
         : (e?.message ?? "Network error");
+    apiLog(`← FAIL ${url}:`, msg);
     return { ok: false, error: msg };
   } finally {
     cancel();

@@ -1,40 +1,42 @@
 import { httpJson } from "./http";
 import { ApiOk, ApiResult, StarMode, StatusResponse } from "./types";
 
-// These paths are what you should implement on the ESP32 server:
-const PATH_STATUS = "/api/status";
-const PATH_MODE = "/api/mode";
-const PATH_TRACKING = "/api/tracking";
-const PATH_NEW_TARGET = "/api/target/new";
-const PATH_LIGHT = "/api/light";
+// ─── ESP32 REST Endpoints ─────────────────────────────────────────────────────
+//
+// Each function maps 1-to-1 to a route the ESP32 HTTP server must expose.
+// All requests are JSON over HTTP on port 80.
 
-export async function getStatus(
-  host: string,
-): Promise<ApiResult<StatusResponse>> {
-  return httpJson<StatusResponse>(host, PATH_STATUS, "GET");
+const PATHS = {
+  status:    "/api/status",    // GET  → StatusResponse
+  mode:      "/api/mode",      // POST { mode: "auto"|"manual" }
+  tracking:  "/api/tracking",  // POST { enabled: bool }
+  newTarget: "/api/target/new",// POST {}
+  light:     "/api/light",     // POST { enabled: bool }
+} as const;
+
+// ─── API Functions ────────────────────────────────────────────────────────────
+
+/** Poll the ESP32 for its current state. */
+export function getStatus(host: string): Promise<ApiResult<StatusResponse>> {
+  return httpJson<StatusResponse>(host, PATHS.status, "GET");
 }
 
-export async function setMode(
-  host: string,
-  mode: StarMode,
-): Promise<ApiResult<ApiOk>> {
-  return httpJson<ApiOk>(host, PATH_MODE, "POST", { mode });
+/** Switch between "auto" (tracking) and "manual" (D-pad) mode. */
+export function setMode(host: string, mode: StarMode): Promise<ApiResult<ApiOk>> {
+  return httpJson<ApiOk>(host, PATHS.mode, "POST", { mode });
 }
 
-export async function setTracking(
-  host: string,
-  enabled: boolean,
-): Promise<ApiResult<ApiOk>> {
-  return httpJson<ApiOk>(host, PATH_TRACKING, "POST", { enabled });
+/** Enable or disable the subject-tracking algorithm. */
+export function setTracking(host: string, enabled: boolean): Promise<ApiResult<ApiOk>> {
+  return httpJson<ApiOk>(host, PATHS.tracking, "POST", { enabled });
 }
 
-export async function newTarget(host: string): Promise<ApiResult<ApiOk>> {
-  return httpJson<ApiOk>(host, PATH_NEW_TARGET, "POST", {});
+/** Tell the gimbal to lock onto a new target in frame. */
+export function newTarget(host: string): Promise<ApiResult<ApiOk>> {
+  return httpJson<ApiOk>(host, PATHS.newTarget, "POST", {});
 }
 
-export async function setLight(
-  host: string,
-  enabled: boolean,
-): Promise<ApiResult<ApiOk>> {
-  return httpJson<ApiOk>(host, PATH_LIGHT, "POST", { enabled });
+/** Turn the spotlight on or off. */
+export function setLight(host: string, enabled: boolean): Promise<ApiResult<ApiOk>> {
+  return httpJson<ApiOk>(host, PATHS.light, "POST", { enabled });
 }
