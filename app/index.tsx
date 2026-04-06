@@ -1,22 +1,23 @@
 import { useRouter } from "expo-router";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import {
-  Alert,
   Pressable,
   SafeAreaView,
   Text,
-  useWindowDimensions,
+  Alert,
   View,
 } from "react-native";
 import { useEsp32 } from "../src/api/useEsp32";
+import { AnimatedButton } from "../src/components/AnimatedButton";
 
 type Action = { label: string; onPress: () => Promise<void> | void };
 
 export default function Index() {
   const router = useRouter();
-  const { height } = useWindowDimensions();
+
   const {
     status,
+    connection,
     error,
     refresh,
     apiSetTracking,
@@ -24,6 +25,17 @@ export default function Index() {
     apiToggleLight,
     apiSetMode,
   } = useEsp32();
+
+  const [connError, setConnError] = useState<string | null>(null);
+
+  const requireConnection = (fn: () => Promise<void> | void) => async () => {
+    if (connection !== "online") {
+      setConnError("App not connected, please connect to STAR-ESP32 in your Wifi Settings");
+      return;
+    }
+    setConnError(null);
+    await fn();
+  };
 
   useEffect(() => {
     refresh();
@@ -33,22 +45,25 @@ export default function Index() {
     if (error) Alert.alert("ESP32", error);
   }, [error]);
 
-  const compact = height < 760;
+  // Auto-dismiss the connection error when connection comes back online
+  useEffect(() => {
+    if (connection === "online") setConnError(null);
+  }, [connection]);
 
   const trackingLabel = status?.tracking ? "Stop Tracking" : "Start Tracking";
 
   const actions: Action[] = [
     {
       label: trackingLabel,
-      onPress: async () => apiSetTracking(!(status?.tracking ?? false)),
+      onPress: requireConnection(async () => apiSetTracking(!(status?.tracking ?? false))),
     },
     {
       label: "New Target",
-      onPress: async () => apiNewTarget(),
+      onPress: requireConnection(async () => apiNewTarget()),
     },
     {
       label: "Toggle Light",
-      onPress: async () => apiToggleLight(),
+      onPress: requireConnection(async () => apiToggleLight()),
     },
     {
       label: "Manual",
@@ -73,8 +88,13 @@ export default function Index() {
         </View>
 
         <View className="w-full max-w-[420px] gap-5">
+          {connError && (
+            <View className="w-full rounded-xl bg-red-500/20 border border-red-500/40 px-4 py-3">
+              <Text className="text-red-400 text-sm text-center">{connError}</Text>
+            </View>
+          )}
           {actions.map((a) => (
-            <Pressable
+            <AnimatedButton
               key={a.label}
               onPress={a.onPress}
               className="h-14 w-full items-center justify-center rounded-pill bg-star-button"
@@ -82,7 +102,7 @@ export default function Index() {
               <Text className="text-[18px] font-normal text-star-buttonText">
                 {a.label}
               </Text>
-            </Pressable>
+            </AnimatedButton>
           ))}
         </View>
 

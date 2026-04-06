@@ -3,13 +3,13 @@ import { useRouter } from "expo-router";
 import React, { useEffect, useMemo } from "react";
 import {
   Alert,
-  Pressable,
   SafeAreaView,
   Text,
   useWindowDimensions,
   View,
 } from "react-native";
 import { useEsp32 } from "../src/api/useEsp32";
+import { AnimatedButton } from "../src/components/AnimatedButton";
 
 type TopAction = { label: string; onPress: () => Promise<void> | void };
 
@@ -79,7 +79,7 @@ export default function ManualScreen() {
 
         <View className="w-full max-w-[520px] gap-4">
           {actions.map((a) => (
-            <Pressable
+            <AnimatedButton
               key={a.label}
               onPress={a.onPress}
               className="h-12 w-full items-center justify-center rounded-pill bg-star-button"
@@ -87,56 +87,56 @@ export default function ManualScreen() {
               <Text className="text-[17px] font-normal text-star-buttonText">
                 {a.label}
               </Text>
-            </Pressable>
+            </AnimatedButton>
           ))}
         </View>
 
         {/* D-Pad */}
         <View className="items-center justify-center">
-          <Pressable
+          <AnimatedButton
             onPressIn={hold("up")}
             onPressOut={wsStop}
             className="h-[66px] w-[66px] items-center justify-center rounded-pill bg-star-button"
-            style={{ marginBottom: 14 }}
+            style={{ marginBottom: dPadGap }}
           >
-            <Ionicons name="chevron-up" size={32} color="#2F344B" />
-          </Pressable>
+            <Ionicons name="chevron-up" size={dPadIcon} color="#2F344B" />
+          </AnimatedButton>
 
           <View className="flex-row items-center justify-center">
-            <Pressable
+            <AnimatedButton
               onPressIn={hold("left")}
               onPressOut={wsStop}
               className="h-[66px] w-[66px] items-center justify-center rounded-pill bg-star-button"
-              style={{ marginRight: 14 }}
+              style={{ marginRight: dPadGap }}
             >
-              <Ionicons name="chevron-back" size={32} color="#2F344B" />
-            </Pressable>
+              <Ionicons name="chevron-back" size={dPadIcon} color="#2F344B" />
+            </AnimatedButton>
 
-            <Pressable
+            <AnimatedButton
               onPress={wsStop}
               className="h-[66px] w-[66px] items-center justify-center rounded-2xl bg-star-button opacity-50"
             >
-              <Ionicons name="stop" size={26} color="#2F344B" />
-            </Pressable>
+              <Ionicons name="stop" size={middleIcon} color="#2F344B" />
+            </AnimatedButton>
 
-            <Pressable
+            <AnimatedButton
               onPressIn={hold("right")}
               onPressOut={wsStop}
               className="h-[66px] w-[66px] items-center justify-center rounded-pill bg-star-button"
-              style={{ marginLeft: 14 }}
+              style={{ marginLeft: dPadGap }}
             >
-              <Ionicons name="chevron-forward" size={32} color="#2F344B" />
-            </Pressable>
+              <Ionicons name="chevron-forward" size={dPadIcon} color="#2F344B" />
+            </AnimatedButton>
           </View>
 
-          <Pressable
+          <AnimatedButton
             onPressIn={hold("down")}
             onPressOut={wsStop}
             className="h-[66px] w-[66px] items-center justify-center rounded-pill bg-star-button"
-            style={{ marginTop: 14 }}
+            style={{ marginTop: dPadGap }}
           >
-            <Ionicons name="chevron-down" size={32} color="#2F344B" />
-          </Pressable>
+            <Ionicons name="chevron-down" size={dPadIcon} color="#2F344B" />
+          </AnimatedButton>
         </View>
       </View>
     </SafeAreaView>
