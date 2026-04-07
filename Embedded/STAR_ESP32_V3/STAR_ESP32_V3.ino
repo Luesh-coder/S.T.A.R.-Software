@@ -117,6 +117,12 @@ bool     centeredOnceInIdle = false;
 enum TrackState : uint8_t { TRACK_IDLE = 0, TRACK_ACTIVE = 1 };
 static TrackState trackState = TRACK_IDLE;
 
+// UART diagnostic counters
+uint32_t rxPacketCount  = 0;
+uint32_t rxErrorCount   = 0;
+uint32_t lastUartStatsMs = 0;
+static const uint32_t UART_STATS_INTERVAL_MS = 2000;
+
 // Manual D-pad flags
 bool moveUp    = false;
 bool moveDown  = false;
@@ -207,14 +213,16 @@ bool readAndProcessPacket() {
 
   uint8_t pkt[PACKET_LEN];
   size_t n = Serial1.readBytes(pkt, PACKET_LEN);
-  if (n != PACKET_LEN) return false;
+  if (n != PACKET_LEN) { rxErrorCount++; return false; }
 
-  if (pkt[0] != START_BYTE || pkt[11] != END_BYTE) return false;
+  if (pkt[0] != START_BYTE || pkt[11] != END_BYTE) { rxErrorCount++; return false; }
 
   uint8_t expected = calcChecksum(&pkt[1], 1 + 8);  // cmd + x(4) + y(4)
-  if (expected != pkt[10]) return false;
+  if (expected != pkt[10]) { rxErrorCount++; return false; }
 
   uint8_t cmd = pkt[1];
+
+  rxPacketCount++;
 
   // CMD 0x00 → IDLE
   if (cmd == 0x00) {
@@ -510,8 +518,8 @@ void applyAutoTracking() {
 void setup() {
   Serial.begin(115200);
 
-  // UART1 for Raspberry Pi CM5 communication
-  Serial1.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN);
+  // UART1 for Raspberry Pi CM5 communication (must match Pi baud rate)
+  Serial1.begin(460800, SERIAL_8N1, RX_PIN, TX_PIN);
 
   // PCA9685 I2C servo driver
   Wire.begin();
@@ -543,7 +551,8 @@ void setup() {
 
   Serial.println("[INIT] REST API ready on port 80");
   Serial.println("[INIT] WebSocket ready on port 81");
-  Serial.println("[INIT] UART1 listening for Pi packets");
+  Serial.printf("[INIT] UART1 ready — baud=%d, RX=GPIO%d, TX=GPIO%d\n", 460800, RX_PIN, TX_PIN);
+  Serial.println("[INIT] UART1 waiting for Pi packets...");
   Serial.println("[INIT] PCA9685 servos: TiltL(ch0), TiltR(ch1), Pan(ch2)");
   Serial.println("[INIT] S.T.A.R. Combined Firmware ready.");
 }
@@ -559,5 +568,14 @@ void loop() {
     applyAutoTracking();
   } else {
     applyManualMovement();
+  }
+
+  // Periodic UART diagnostics
+  uint32_t now = millis();
+  if (now - lastUartStatsMs >= UART_STATS_INTERVAL_MS) {
+    lastUartStatsMs = now;
+    Serial.printf("[UART] RX packets=%lu errors=%lu | mode=%s tracking=%s\n",
+                  (unsigned long)rxPacketCount, (unsigned long)rxErrorCount,
+                  mode.c_str(), trackingEnabled ? "ON" : "OFF");
   }
 }
