@@ -235,64 +235,55 @@ static void enterIdle() {
 
 // Read and process a single binary tracking packet from the Pi
 bool readAndProcessPacket() {
-  if (Serial1.available() < PACKET_LEN) return false;
+// CMD 0x01 → TRACK
+if (cmd != 0x01) return false;
+if (!trackingEnabled) return true;
 
-  while (Serial1.available() && Serial1.peek() != START_BYTE) {
-    Serial1.read();
-  }
-  if (Serial1.available() < PACKET_LEN) return false;
+float norm_x, norm_y;
+memcpy(&norm_x, &pkt[2], 4);
+memcpy(&norm_y, &pkt[6], 4);
 
-  uint8_t pkt[PACKET_LEN];
-  size_t n = Serial1.readBytes(pkt, PACKET_LEN);
-  if (n != PACKET_LEN) { rxErrorCount++; return false; }
+norm_x = clampf(norm_x, -1.0f, 1.0f);
+norm_y = clampf(norm_y, -1.0f, 1.0f);
 
-  if (pkt[0] != START_BYTE || pkt[11] != END_BYTE) { rxErrorCount++; return false; }
+if (fabsf(norm_x) < DEADBAND) norm_x = 0.0f;
+if (fabsf(norm_y) < DEADBAND) norm_y = 0.0f;
 
-  uint8_t expected = calcChecksum(&pkt[1], 1 + 8);  // cmd + x(4) + y(4)
-  if (expected != pkt[10]) { rxErrorCount++; return false; }
+filtered_x = (SMOOTH_ALPHA * norm_x) + ((1.0f - SMOOTH_ALPHA) * filtered_x);
+filtered_y = (SMOOTH_ALPHA * norm_y) + ((1.0f - SMOOTH_ALPHA) * filtered_y);
 
-  uint8_t cmd = pkt[1];
-  rxPacketCount++;
+// --- Closed-loop prop ortional control ---
+// norm_x/y is the angular error of the target relative to the camera's
+// optical axis, normalized to [-1, +1] across the sensor's half-FOV.
+// Convert the error into an ANGULAR NUDGE applied to the current servo
+// position, so the loop closes through the camera.
+//
+// HFOV_HALF_DEG / VFOV_HALF_DEG should match the IMX477 + lens system.
+// With the 6.1mm EFL and 6.32mm horizontal sensor → HFOV ≈ 54°, so half ≈ 27°.
+// Tune P_GAIN down if the gimbal oscillates, up if it lags.
+static const float HFOV_HALF_DEG = 27.0f;
+static const float VFOV_HALF_DEG = 27.0f;
+static const float PAN_P_GAIN    = 0.35f;  // 0.2–0.5 typical
+static const float TILT_P_GAIN   = 0.25f;
 
-  // CMD 0x00 → IDLE
-  if (cmd == 0x00) {
-    enterIdle();
-    return true;
-  }
+float panErrorDeg  = filtered_x * HFOV_HALF_DEG;
+float tiltErrorDeg = filtered_y * VFOV_HALF_DEG;
 
-  // CMD 0x01 → TRACK
-  if (cmd != 0x01) return false;
+// IMPORTANT: check the sign. If the camera's +x (right in frame) corresponds
+// to DECREASING pan angle on your servo, flip the sign here.
+float panNudge  = PAN_P_GAIN  * panErrorDeg;
+float tiltNudge = TILT_P_GAIN * tiltErrorDeg;
 
-  // Only apply motion if tracking is enabled via the app
-  if (!trackingEnabled) return true;
+// Use currentPan (actual position) rather than targetPan so the loop
+// integrates cleanly without wind-up.
+setTargetPan (currentPan  - panNudge);   // flip sign here if needed
+setTargetTilt(currentTilt + tiltNudge);  // flip sign here if needed
 
-  float norm_x, norm_y;
-  memcpy(&norm_x, &pkt[2], 4);
-  memcpy(&norm_y, &pkt[6], 4);
+trackState = TRACK_ACTIVE;
 
-  norm_x = clampf(norm_x, -1.0f, 1.0f);
-  norm_y = clampf(norm_y, -1.0f, 1.0f);
-
-  if (fabsf(norm_x) < DEADBAND) norm_x = 0.0f;
-  if (fabsf(norm_y) < DEADBAND) norm_y = 0.0f;
-
-  filtered_x = (SMOOTH_ALPHA * norm_x) + ((1.0f - SMOOTH_ALPHA) * filtered_x);
-  filtered_y = (SMOOTH_ALPHA * norm_y) + ((1.0f - SMOOTH_ALPHA) * filtered_y);
-
-  float tx = (filtered_x + 1.0f) * 0.5f;
-  float ty = (filtered_y + 1.0f) * 0.5f;
-
-  float panTarget  = (float)PAN_MAX  - tx * (float)(PAN_MAX  - PAN_MIN);
-  float tiltTarget = (float)TILT_MIN + ty * (float)(TILT_MAX - TILT_MIN);
-
-  setTargetPan(panTarget);
-  setTargetTilt(tiltTarget);
-
-  trackState = TRACK_ACTIVE;
-
-  Serial.printf("[TRACK] nx=%.2f ny=%.2f | targetPan=%.1f targetTilt=%.1f\n",
-                norm_x, norm_y, panTarget, tiltTarget);
-  return true;
+Serial.printf("[TRACK] err=(%.2f, %.2f) nudge=(%.2f°, %.2f°) target=(%.1f°, %.1f°)\n",
+              filtered_x, filtered_y, panNudge, tiltNudge, targetPan, targetTilt);
+return true;
 }
 
 // ========================== JSON Helpers (no library needed) ==========

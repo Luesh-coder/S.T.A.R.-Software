@@ -42,13 +42,12 @@ export function useEsp32() {
   // ── Status polling ──────────────────────────────────────────────────────────
 
   const refresh = useCallback(async () => {
-    setError(null);
     const res = await getStatus(host);
     if (isApiErr(res)) {
-      setError(res.error);
       setConnection("offline");
       return;
     }
+    setError(null);
     setStatus(res);
     setConnection("online");
   }, [host]);
@@ -79,9 +78,9 @@ export function useEsp32() {
       setError(null);
       const res = await setMode(host, mode);
       if (isApiErr(res)) { setError(res.error); return; }
-      await refresh();
+      setStatus(prev => prev ? { ...prev, mode } : prev);
     },
-    [host, refresh],
+    [host],
   );
 
   const apiSetTracking = useCallback(
