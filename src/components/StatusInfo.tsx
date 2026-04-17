@@ -18,17 +18,17 @@ export function StatusInfo({ connection, status }: Props) {
             isConnected ? "bg-star-success" : "bg-star-danger"
           }`}
         />
-        <Text className="text-star-text text-sm opacity-70">
+        <Text className="text-star-text text-base opacity-70">
           {isConnected ? "Connected" : "No Connection"}
         </Text>
       </View>
 
       <View className="flex-row items-center gap-3">
-        <Text className="text-star-text text-sm opacity-70">
+        <Text className="text-star-text text-base opacity-70">
           Mode: {status?.mode === "auto" ? "Auto" : status?.mode === "manual" ? "Manual" : "—"}
         </Text>
-        <Text className="text-star-text text-sm opacity-40">•</Text>
-        <Text className="text-star-text text-sm opacity-70">
+        <Text className="text-star-text text-base opacity-40">•</Text>
+        <Text className="text-star-text text-base opacity-70">
           Tracking: {status?.tracking ? "ON" : "OFF"}
         </Text>
       </View>
