@@ -571,11 +571,17 @@ try:
             if DRAW_OVERLAY:
                 # All detected persons — thin white boxes. Skip the one
                 # matching the tracked target; it gets drawn in blue below.
-                for _conf, pbox in last_persons:
+                for conf, pbox in last_persons:
                     if target_box is not None and iou(pbox, target_box) >= 0.5:
                         continue
                     px1, py1, px2, py2 = map(int, pbox)
                     cv2.rectangle(disp, (px1, py1), (px2, py2), (255, 255, 255), 1)
+                    cv2.putText(
+                        disp, f"{conf:.2f}",
+                        (px1 + 4, py1 + 16),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (255, 255, 255), 1, cv2.LINE_AA
+                    )
 
                 # Tracked target — blue box + crosshair
                 if target_box is not None:
@@ -587,6 +593,17 @@ try:
                     )
                     x1, y1, x2, y2 = map(int, target_box)
                     cv2.rectangle(disp, (x1, y1), (x2, y2), blue, 2)
+                    # Find the confidence for the tracked target from last YOLO results
+                    tracked_conf = next(
+                        (c for c, b in last_persons if iou(b, target_box) >= 0.5), None
+                    )
+                    if tracked_conf is not None:
+                        cv2.putText(
+                            disp, f"{tracked_conf:.2f}",
+                            (x1 + 4, y1 + 16),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                            blue, 1, cv2.LINE_AA
+                        )
 
             if SHOW_FPS:
                 cv2.putText(
