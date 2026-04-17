@@ -65,7 +65,7 @@ export default function Index() {
     <SafeAreaView className="flex-1 bg-star-bg">
       <View className="flex-1 items-center justify-evenly px-6">
         <View className="items-center">
-          <Text className="text-star-text text-[42px] font-light tracking-[0.28em]">
+          <Text className="text-star-text text-[54px] font-light tracking-[0.28em]">
             S.T.A.R.
           </Text>
           <StatusInfo connection={connection} status={status} />
@@ -88,7 +88,7 @@ export default function Index() {
         </View>
 
         <AnimatedButton onPress={refresh}>
-          <Text className="text-star-text text-xs opacity-60">
+          <Text className="text-star-text text-sm opacity-60">
             Tap to refresh status
           </Text>
         </AnimatedButton>
