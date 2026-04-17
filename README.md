@@ -1,50 +1,71 @@
-# Welcome to your Expo app 👋
+# S.T.A.R. — Software
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Mobile app and embedded firmware for the **S.T.A.R.** (Subject Tracking & Autonomous Response) gimbal system.
 
-## Get started
+## Overview
 
-1. Install dependencies
+S.T.A.R. is a two-axis motorized gimbal that autonomously tracks a person in frame using computer vision, and can also be controlled manually from a mobile app. The system is built around three hardware components that work together:
 
-   ```bash
-   npm install
-   ```
+| Component            | Role                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Raspberry Pi CM5** | Runs YOLO-based person detection and sends servo commands over UART                                     |
+| **ESP32-S3**         | Drives the gimbal servos via a PCA9685 PWM driver, hosts a Wi-Fi AP, REST API, and WebSocket server     |
+| **React Native App** | Connects to the ESP32 over Wi-Fi to control tracking, switch modes, and manually pan/tilt               |
 
-2. Start the app
+## Repository Structure
 
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
+```text
+S.T.A.R.-Software/
+├── app/                    # Expo Router screens
+│   ├── index.tsx           # Main screen (auto tracking controls)
+│   └── manual.tsx          # Manual D-pad control screen
+├── src/
+│   ├── api/                # ESP32 communication layer (HTTP + WebSocket)
+│   └── components/         # Shared UI components
+└── Embedded/
+    ├── STAR_ESP32_V3/      # Current ESP32-S3 firmware (Arduino)
+    ├── starOptimizedv3.py  # Current Raspberry Pi tracking script
+    └── ...                 # Previous firmware/script versions
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## How It Works
 
-## Learn more
+### Auto Mode
 
-To learn more about developing your project with Expo, look at the following resources:
+The Raspberry Pi runs `starOptimizedv3.py`, which uses a YOLO model to detect people and an OpenCV tracker (MOSSE/KCF/CSRT) to follow a locked target. It sends binary UART packets (`0xAA ... 0xFF`) to the ESP32 at up to 30 Hz. The ESP32 translates normalized `(x, y)` offsets into servo angles with deadband filtering and exponential smoothing.
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+### Manual Mode
 
-## Join the community
+The mobile app connects to the ESP32's WebSocket server (port 81). Holding a D-pad button streams directional commands to the ESP32, which moves the pan/tilt servos in small increments in real time.
 
-Join our community of developers creating universal apps.
+### REST API (ESP32 — port 80)
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+| Endpoint           | Method | Description                                        |
+| ------------------ | ------ | -------------------------------------------------- |
+| `/api/status`      | GET    | Returns current mode, tracking state, and light state |
+| `/api/mode`        | POST   | Switch between `"auto"` and `"manual"`             |
+| `/api/tracking`    | POST   | Enable or disable the tracking algorithm           |
+| `/api/target/new`  | POST   | Lock onto a new target in frame                    |
+| `/api/light`       | POST   | Toggle the spotlight                               |
+
+## Hardware
+
+- **ESP32-S3** dev board
+- **PCA9685** 16-channel PWM driver over I2C (addr `0x40`)
+  - Ch 0: Pan servo
+  - Ch 1: Tilt-Left servo (differential pair)
+  - Ch 2: Tilt-Right servo (mirrored)
+- **Raspberry Pi CM5** connected via UART1 (RX=GPIO44, TX=GPIO43)
+- Spotlight relay / LED on GPIO 2
+- Wi-Fi AP: `STAR-ESP32` / `star12345`
+
+## Mobile App Setup
+
+Built with [Expo](https://expo.dev) and React Native.
+
+```bash
+npm install
+npx expo start
+```
+
+Connect your phone to the `STAR-ESP32` Wi-Fi network before launching the app.
