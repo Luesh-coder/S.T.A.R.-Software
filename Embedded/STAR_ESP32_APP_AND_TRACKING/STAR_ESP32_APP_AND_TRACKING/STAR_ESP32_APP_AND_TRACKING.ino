@@ -66,9 +66,9 @@ static const int TX_PIN = 43;
 
 // ========================== Servo / Motion Limits ====================
 // Pan: full 0–180° , center at 90°
-static const int PAN_MIN    = 30;
+static const int PAN_MIN    = 40;
 static const int PAN_MAX    = 150;
-static const int PAN_CENTER = 90;
+static const int PAN_CENTER = 95;
 
 // Tilt: restricted to 110–140°, center at 130°
 static const int TILT_MIN    = 110;

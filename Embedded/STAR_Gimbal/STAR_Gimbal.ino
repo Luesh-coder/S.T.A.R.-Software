@@ -11,9 +11,9 @@ int rightServo = 1;  // PCA9685 channel 1 (right side)
 int panServo   = 2;  // PCA9685 channel 2 (pan)
 
 // Pan limits
-#define PAN_MIN    0
-#define PAN_MAX    180
-#define PAN_CENTER 90
+#define PAN_MIN    40
+#define PAN_MAX    150
+#define PAN_CENTER 95
 
 // Tilt limits
 #define TILT_MIN    110
@@ -51,11 +51,39 @@ void setup() {
   setTilt(TILT_CENTER);  // Center tilt on startup
   setPan(PAN_CENTER);  // Center pan on startup
   delay(500);
+
+   // Pan right (90° → 180°)
+  for (int pos = PAN_CENTER; pos <= PAN_MAX; pos++) {
+    setPan(pos);
+    delay(30);
+  }
+  delay(500);
+
+  // Pan back to center (180° → 90°)
+  for (int pos = PAN_MAX; pos >= PAN_CENTER; pos--) {
+    setPan(pos);
+    delay(30);
+  }
+  delay(500);
+
+  // Pan left (90° → 0°)
+  for (int pos = PAN_CENTER; pos >= PAN_MIN; pos--) {
+    setPan(pos);
+    delay(30);
+  }
+  delay(500);
+
+  // Return to center (0° → 90°)
+  for (int pos = PAN_MIN; pos <= PAN_CENTER; pos++) {
+    setPan(pos);
+    delay(30);
+  }
+  delay(500);
 }
 
 void loop() {
   // --- Tilt test ---
-
+  /*
   // Tilt forward (130° → 140°)
   for (int pos = TILT_CENTER; pos <= TILT_MAX; pos++) {
     setTilt(pos);
@@ -85,7 +113,9 @@ void loop() {
   delay(500);
 
   // --- Pan test ---
+  */
 
+  /*
   // Pan right (90° → 180°)
   for (int pos = PAN_CENTER; pos <= PAN_MAX; pos++) {
     setPan(pos);
@@ -113,4 +143,5 @@ void loop() {
     delay(30);
   }
   delay(500);
+  */
 }
