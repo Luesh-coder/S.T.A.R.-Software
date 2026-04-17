@@ -66,25 +66,30 @@ static const int TX_PIN = 43;
 
 // ========================== Servo / Motion Limits ====================
 // Pan: full 0–180° , center at 90°
-static const int PAN_MIN    = 30;
+static const int PAN_MIN    = 35;
 static const int PAN_MAX    = 150;
-static const int PAN_CENTER = 90;
+static const int PAN_CENTER = 95;
 
 // Tilt: restricted to 110–140°, center at 130°
 static const int TILT_MIN    = 110;
 static const int TILT_MAX    = 140;
 static const int TILT_CENTER = 130;
 
-// Tracking smoothing parameters
+// Tracking parameters
 static const float DEADBAND     = 0.04f;
-static const float SMOOTH_ALPHA = 0.12f;
 
-// Rate limit (degrees per interpolation tick)
-// Lowered to reduce mechanical stress on the build during init, manual control,
-// and target-switch recentering. Tilt is kept slower than pan because the tilt
-// pair carries more mechanical load.
-static const float MAX_PAN_DEGREES_PER_UPDATE  = 0.5f;   // ~50°/sec
-static const float MAX_TILT_DEGREES_PER_UPDATE = 0.25f;  // ~25°/sec
+// Tracking gain: degrees of correction per unit of normalised offset.
+// Applied each TRACK packet (~30 Hz from Pi).  Lower = gentler, less overshoot.
+// No EMA on the ESP32 — the Pi already smooths the signal heavily.
+static const float PAN_TRACK_GAIN  = 10.0f;
+static const float TILT_TRACK_GAIN = 1.5f;
+
+// Rate limit (degrees per interpolation tick at 100 Hz)
+// These are the hard physical caps on servo speed.  Keeping them conservative
+// prevents the servo from reaching a (now-stale) target before the Pi has had
+// time to report that the person is closer to centre.
+static const float MAX_PAN_DEGREES_PER_UPDATE  = 0.05f;   // ~30°/sec
+static const float MAX_TILT_DEGREES_PER_UPDATE = 0.1f;  // ~15°/sec
 
 // Interpolation tick period
 static const uint32_t INTERP_INTERVAL_MS = 10;
@@ -139,9 +144,7 @@ float currentTilt = (float)TILT_CENTER;
 float targetPan  = (float)PAN_CENTER;
 float targetTilt = (float)TILT_CENTER;
 
-// Tracking smoothing state
-float filtered_x = 0.0f;
-float filtered_y = 0.0f;
+// Previous norm values (for derivative damping — currently unused, reserved)
 
 // Timing
 uint32_t lastGoodPacketMs = 0;
@@ -229,8 +232,6 @@ void setStopMotion() {
 
 static void enterIdle() {
   trackState = TRACK_IDLE;
-  filtered_x = 0.0f;
-  filtered_y = 0.0f;
 }
 
 // Read and process a single binary tracking packet from the Pi
@@ -276,14 +277,12 @@ bool readAndProcessPacket() {
   if (fabsf(norm_x) < DEADBAND) norm_x = 0.0f;
   if (fabsf(norm_y) < DEADBAND) norm_y = 0.0f;
 
-  filtered_x = (SMOOTH_ALPHA * norm_x) + ((1.0f - SMOOTH_ALPHA) * filtered_x);
-  filtered_y = (SMOOTH_ALPHA * norm_y) + ((1.0f - SMOOTH_ALPHA) * filtered_y);
-
-  float tx = (filtered_x + 1.0f) * 0.5f;
-  float ty = (filtered_y + 1.0f) * 0.5f;
-
-  float panTarget  = (float)PAN_MAX  - tx * (float)(PAN_MAX  - PAN_MIN);
-  float tiltTarget = (float)TILT_MIN + ty * (float)(TILT_MAX - TILT_MIN);
+  // Proportional-to-current: offset drives a correction relative to where
+  // the servo IS right now.  No EMA here — the Pi signal is already heavily
+  // smoothed.  As the camera catches up to the person the Pi's offset
+  // shrinks toward zero, naturally decelerating the servo (built-in damping).
+  float panTarget  = currentPan  - norm_x * PAN_TRACK_GAIN;
+  float tiltTarget = currentTilt + norm_y * TILT_TRACK_GAIN;
 
   setTargetPan(panTarget);
   setTargetTilt(tiltTarget);
@@ -395,8 +394,6 @@ void handleTracking() {
 void handleNewTarget() {
   Serial.println("[REST] POST /api/target/new -> new target requested");
   sendSwitchTargetPacket();
-  filtered_x = 0.0f;
-  filtered_y = 0.0f;
   sendJson(200, "{\"ok\":true}");
 }
 

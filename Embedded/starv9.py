@@ -56,13 +56,13 @@ STILL_CENTER_DEADZONE_PX = 3.0
 STILL_FRAMES_REQUIRED = 6
 
 # Output smoothing (normalized coords)
-OUTPUT_EMA_ALPHA_FAST = 0.40
+OUTPUT_EMA_ALPHA_FAST = 0.60
 OUTPUT_EMA_ALPHA_SLOW = 0.10
 
 # Output deadzone with hysteresis. Once inside the "inner" zone, the
 # output is held at zero until it exceeds the "outer" zone.
-DEADZONE_INNER = 0.020
-DEADZONE_OUTER = 0.035
+DEADZONE_INNER = 0.025
+DEADZONE_OUTER = 0.045
 
 # Minimum change required to actually transmit a new value (prevents
 # sending tiny oscillations to the gimbal).
@@ -576,12 +576,11 @@ try:
                         continue
                     px1, py1, px2, py2 = map(int, pbox)
                     cv2.rectangle(disp, (px1, py1), (px2, py2), (255, 255, 255), 1)
-                    cv2.putText(
-                        disp, f"{conf:.2f}",
-                        (px1 + 4, py1 + 16),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                        (255, 255, 255), 1, cv2.LINE_AA
-                    )
+                    label = f"{conf:.2f}"
+                    (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                    cv2.rectangle(disp, (px1 + 2, py1 + 2), (px1 + 4 + lw, py1 + 6 + lh), (255, 255, 255), -1)
+                    cv2.putText(disp, label, (px1 + 4, py1 + 4 + lh),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
 
                 # Tracked target — blue box + crosshair
                 if target_box is not None:
@@ -598,12 +597,11 @@ try:
                         (c for c, b in last_persons if iou(b, target_box) >= 0.5), None
                     )
                     if tracked_conf is not None:
-                        cv2.putText(
-                            disp, f"{tracked_conf:.2f}",
-                            (x1 + 4, y1 + 16),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                            blue, 1, cv2.LINE_AA
-                        )
+                        label = f"{tracked_conf:.2f}"
+                        (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                        cv2.rectangle(disp, (x1 + 2, y1 + 2), (x1 + 4 + lw, y1 + 6 + lh), blue, -1)
+                        cv2.putText(disp, label, (x1 + 4, y1 + 4 + lh),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
             if SHOW_FPS:
                 cv2.putText(
