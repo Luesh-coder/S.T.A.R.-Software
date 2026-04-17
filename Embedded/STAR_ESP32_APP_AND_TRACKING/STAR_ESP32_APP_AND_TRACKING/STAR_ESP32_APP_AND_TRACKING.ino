@@ -66,9 +66,9 @@ static const int TX_PIN = 43;
 
 // ========================== Servo / Motion Limits ====================
 // Pan: full 0–180° , center at 90°
-static const int PAN_MIN    = 40;
+static const int PAN_MIN    = 30;
 static const int PAN_MAX    = 150;
-static const int PAN_CENTER = 95;
+static const int PAN_CENTER = 90;
 
 // Tilt: restricted to 110–140°, center at 130°
 static const int TILT_MIN    = 110;
@@ -76,14 +76,15 @@ static const int TILT_MAX    = 140;
 static const int TILT_CENTER = 130;
 
 // Tracking smoothing parameters
-static const float DEADBAND     = 0.05f;
-static const float SMOOTH_ALPHA = 0.18f;
+static const float DEADBAND     = 0.04f;
+static const float SMOOTH_ALPHA = 0.12f;
 
 // Rate limit (degrees per interpolation tick)
-// Balanced: 2× the original (0.5/0.25) for responsive initial acquisition,
-// but not so fast that packet-to-packet noise translates into visible jitter.
-static const float MAX_PAN_DEGREES_PER_UPDATE  = 1.0f;   // ~100°/sec
-static const float MAX_TILT_DEGREES_PER_UPDATE = 0.5f;   // ~50°/sec
+// Lowered to reduce mechanical stress on the build during init, manual control,
+// and target-switch recentering. Tilt is kept slower than pan because the tilt
+// pair carries more mechanical load.
+static const float MAX_PAN_DEGREES_PER_UPDATE  = 0.5f;   // ~50°/sec
+static const float MAX_TILT_DEGREES_PER_UPDATE = 0.25f;  // ~25°/sec
 
 // Interpolation tick period
 static const uint32_t INTERP_INTERVAL_MS = 10;
@@ -234,29 +235,26 @@ static void enterIdle() {
 
 // Read and process a single binary tracking packet from the Pi
 bool readAndProcessPacket() {
-  // Read exactly PACKET_LEN bytes; caller already confirmed availability
+  if (Serial1.available() < PACKET_LEN) return false;
+
+  while (Serial1.available() && Serial1.peek() != START_BYTE) {
+    Serial1.read();
+  }
+  if (Serial1.available() < PACKET_LEN) return false;
+
   uint8_t pkt[PACKET_LEN];
-  for (int i = 0; i < PACKET_LEN; i++) {
-    pkt[i] = (uint8_t)Serial1.read();
-  }
+  size_t n = Serial1.readBytes(pkt, PACKET_LEN);
+  if (n != PACKET_LEN) { rxErrorCount++; return false; }
 
-  // Validate framing
-  if (pkt[0] != START_BYTE || pkt[PACKET_LEN - 1] != END_BYTE) {
-    rxErrorCount++;
-    return false;
-  }
+  if (pkt[0] != START_BYTE || pkt[11] != END_BYTE) { rxErrorCount++; return false; }
 
-  // Validate checksum (covers bytes 1..9, i.e. cmd + 8 payload bytes)
-  uint8_t expected = calcChecksum(&pkt[1], 9);
-  if (pkt[10] != expected) {
-    rxErrorCount++;
-    return false;
-  }
+  uint8_t expected = calcChecksum(&pkt[1], 1 + 8);  // cmd + x(4) + y(4)
+  if (expected != pkt[10]) { rxErrorCount++; return false; }
 
-  rxPacketCount++;
   uint8_t cmd = pkt[1];
+  rxPacketCount++;
 
-  // CMD 0x00 → IDLE: Pi reports no target
+  // CMD 0x00 → IDLE
   if (cmd == 0x00) {
     enterIdle();
     return true;
@@ -264,6 +262,8 @@ bool readAndProcessPacket() {
 
   // CMD 0x01 → TRACK
   if (cmd != 0x01) return false;
+
+  // Only apply motion if tracking is enabled via the app
   if (!trackingEnabled) return true;
 
   float norm_x, norm_y;
@@ -276,47 +276,22 @@ bool readAndProcessPacket() {
   if (fabsf(norm_x) < DEADBAND) norm_x = 0.0f;
   if (fabsf(norm_y) < DEADBAND) norm_y = 0.0f;
 
-  if (trackState == TRACK_IDLE) {
-    // First packet after idle: seed the filter at the measured value so the
-    // gimbal aims immediately rather than ramping up from 0 over ~500 ms.
-    filtered_x = norm_x;
-    filtered_y = norm_y;
-  } else {
-    filtered_x = (SMOOTH_ALPHA * norm_x) + ((1.0f - SMOOTH_ALPHA) * filtered_x);
-    filtered_y = (SMOOTH_ALPHA * norm_y) + ((1.0f - SMOOTH_ALPHA) * filtered_y);
-  }
+  filtered_x = (SMOOTH_ALPHA * norm_x) + ((1.0f - SMOOTH_ALPHA) * filtered_x);
+  filtered_y = (SMOOTH_ALPHA * norm_y) + ((1.0f - SMOOTH_ALPHA) * filtered_y);
 
-  // --- Closed-loop proportional control ---
-  // norm_x/y is the angular error of the target relative to the camera's
-  // optical axis, normalized to [-1, +1] across the sensor's half-FOV.
-  // Convert the error into an ANGULAR NUDGE applied to the current servo
-  // position, so the loop closes through the camera.
-  //
-  // HFOV_HALF_DEG / VFOV_HALF_DEG should match the IMX477 + lens system.
-  // With the 6.1mm EFL and 6.32mm horizontal sensor → HFOV ≈ 54°, so half ≈ 27°.
-  // Tune P_GAIN down if the gimbal oscillates, up if it lags.
-  static const float HFOV_HALF_DEG = 27.0f;
-  static const float VFOV_HALF_DEG = 27.0f;
-  static const float PAN_P_GAIN    = 0.20f;  // lowered to prevent overshoot given ~130 ms pipeline delay
-  static const float TILT_P_GAIN   = 0.15f;
+  float tx = (filtered_x + 1.0f) * 0.5f;
+  float ty = (filtered_y + 1.0f) * 0.5f;
 
-  float panErrorDeg  = filtered_x * HFOV_HALF_DEG;
-  float tiltErrorDeg = filtered_y * VFOV_HALF_DEG;
+  float panTarget  = (float)PAN_MAX  - tx * (float)(PAN_MAX  - PAN_MIN);
+  float tiltTarget = (float)TILT_MIN + ty * (float)(TILT_MAX - TILT_MIN);
 
-  // IMPORTANT: check the sign. If the camera's +x (right in frame) corresponds
-  // to DECREASING pan angle on your servo, flip the sign here.
-  float panNudge  = PAN_P_GAIN  * panErrorDeg;
-  float tiltNudge = TILT_P_GAIN * tiltErrorDeg;
-
-  // Use currentPan (actual position) rather than targetPan so the loop
-  // integrates cleanly without wind-up.
-  setTargetPan (currentPan  - panNudge);   // flip sign here if needed
-  setTargetTilt(currentTilt + tiltNudge);  // flip sign here if needed
+  setTargetPan(panTarget);
+  setTargetTilt(tiltTarget);
 
   trackState = TRACK_ACTIVE;
 
-  Serial.printf("[TRACK] err=(%.2f, %.2f) nudge=(%.2f, %.2f) target=(%.1f, %.1f)\n",
-                filtered_x, filtered_y, panNudge, tiltNudge, targetPan, targetTilt);
+  Serial.printf("[TRACK] nx=%.2f ny=%.2f | targetPan=%.1f targetTilt=%.1f\n",
+                norm_x, norm_y, panTarget, tiltTarget);
   return true;
 }
 
