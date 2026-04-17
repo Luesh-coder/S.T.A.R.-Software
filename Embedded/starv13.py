@@ -40,7 +40,7 @@ IOU_KEEP_THRESH = 0.15
 
 # --- Anti-jitter / smoothing (v7) ---
 # Box smoothing — much heavier than before
-BOX_EMA_ALPHA_FAST = 0.65   # used when target is clearly moving
+BOX_EMA_ALPHA_FAST = 0.45   # used when target is clearly moving
 BOX_EMA_ALPHA_SLOW = 0.08   # used when target is nearly still
 REINIT_IOU_THRESH = 0.70    # only re-init tracker if YOLO disagrees a lot
 
@@ -56,15 +56,15 @@ STILL_CENTER_DEADZONE_PX = 5.0
 STILL_FRAMES_REQUIRED = 10
 
 # Output smoothing (normalized coords)
-OUTPUT_EMA_ALPHA_FAST = 0.70
+OUTPUT_EMA_ALPHA_FAST = 0.50
 OUTPUT_EMA_ALPHA_SLOW = 0.10
 
 # Velocity-based look-ahead prediction.
 # VEL_SMOOTH_ALPHA: how quickly the velocity estimate adapts (0=frozen, 1=raw).
 # VEL_PREDICT_K: frames to extrapolate ahead. Increase to lead the target more
 # aggressively; decrease if the box overshoots when the person stops abruptly.
-VEL_SMOOTH_ALPHA = 0.50
-VEL_PREDICT_K   = 1.2
+VEL_SMOOTH_ALPHA = 0.30
+VEL_PREDICT_K   = 0.5
 
 # Output deadzone with hysteresis. Once inside the "inner" zone, the
 # output is held at zero until it exceeds the "outer" zone.
@@ -441,6 +441,16 @@ try:
                     still_frames = 0
                     box_vel_x = 0.0
                     box_vel_y = 0.0
+                    # Seed the output EMA directly at the measured position so the
+                    # first UART packet carries the true error, not a 70%-damped
+                    # ramp-up from zero. Also exit the deadzone if off-centre.
+                    _cx, _cy = torso_center_from_box(target_box)
+                    sent_norm_x = clamp((_cx - frame_w / 2.0) / (frame_w / 2.0), -1.0, 1.0)
+                    sent_norm_y = clamp((_cy - frame_h / 2.0) / (frame_h / 2.0), -1.0, 1.0)
+                    last_tx_x = sent_norm_x
+                    last_tx_y = sent_norm_y
+                    in_deadzone_x = abs(sent_norm_x) <= DEADZONE_OUTER
+                    in_deadzone_y = abs(sent_norm_y) <= DEADZONE_OUTER
             else:
                 # If the operator tapped "New Target", switch to the person
                 # whose center is nearest to the current target (excluding
