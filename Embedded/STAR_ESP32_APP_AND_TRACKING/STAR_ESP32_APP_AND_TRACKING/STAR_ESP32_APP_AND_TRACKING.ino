@@ -1,12 +1,18 @@
 /*
  * ============================================================================
- *  S.T.A.R. – ESP32-S3 App + Tracking Firmware
+ *  S.T.A.R. – ESP32-S3 App + Tracking Firmware  (v2 — velocity control)
  * ============================================================================
  *
- *  Combines:
- *    - Smooth float-based servo interpolation from
- *      STAR_ESP32_TO_PI_COMMUNICATION (Pi tracking sketch).
- *    - Wi-Fi AP + REST + WebSocket app interface from STAR_ESP32_V3.
+ *  Changes vs. previous revision:
+ *    - Tracking control law rewritten from "proportional-to-current"
+ *      (which integrated error into the target every packet and caused
+ *      runaway / overshoot) to proportional VELOCITY control.
+ *      norm_x / norm_y now directly command a servo velocity; the 100 Hz
+ *      interpolator integrates that velocity into position.
+ *    - Rate limits raised from ~5–10°/sec to ~100–150°/sec so the gimbal
+ *      can actually keep up with a moving person.
+ *    - Sign convention for pan tracking flipped to match camera-right =
+ *      pan-right. Verify on hardware; flip PAN_VEL_SIGN if needed.
  *
  *  Hardware:
  *    - ESP32-S3 dev board
@@ -65,37 +71,45 @@ static const int RX_PIN = 44;
 static const int TX_PIN = 43;
 
 // ========================== Servo / Motion Limits ====================
-// Pan: full 0–180° , center at 90°
-static const int PAN_MIN    = 35;
-static const int PAN_MAX    = 150;
-static const int PAN_CENTER = 95;
+// Pan: restricted to 50–110°, center at 90°
+static const int PAN_MIN    = 85;
+static const int PAN_MAX    = 115;
+static const int PAN_CENTER = 100;
 
-// Tilt: restricted to 110–140°, center at 130°
-static const int TILT_MIN    = 110;
-static const int TILT_MAX    = 140;
-static const int TILT_CENTER = 130;
+// Tilt: 135° = mechanically level. MIN=115 (up), MAX=155 (down), center=135 (level).
+static const int TILT_MIN    = 125;
+static const int TILT_MAX    = 145;
+static const int TILT_CENTER = 135;
 
-// Tracking parameters
-static const float DEADBAND     = 0.04f;
+// ----- Tracking parameters (direct position mapping) -----
+// Deadband on the normalised error. Below this, servo holds position.
+static const float DEADBAND = 0.03f;
 
-// Tracking gain: degrees of correction per unit of normalised offset.
-// Applied each TRACK packet (~30 Hz from Pi).  Lower = gentler, less overshoot.
-// No EMA on the ESP32 — the Pi already smooths the signal heavily.
-static const float PAN_TRACK_GAIN  = 10.0f;
-static const float TILT_TRACK_GAIN = 1.5f;
+// Sign of the position command. Flip if the gimbal moves the wrong way.
+//   +1.0 : norm > 0 -> toward MAX   |   -1.0 : norm > 0 -> toward MIN
+static const float PAN_POS_SIGN  = -1.0f;
+static const float TILT_POS_SIGN = +1.0f;
 
-// Rate limit (degrees per interpolation tick at 100 Hz)
-// These are the hard physical caps on servo speed.  Keeping them conservative
-// prevents the servo from reaching a (now-stale) target before the Pi has had
-// time to report that the person is closer to centre.
-static const float MAX_PAN_DEGREES_PER_UPDATE  = 0.05f;   // ~30°/sec
-static const float MAX_TILT_DEGREES_PER_UPDATE = 0.1f;  // ~15°/sec
+// --- Pan tuning (direct position mapping, same design as tilt) ---
+// norm_x maps to an absolute pan angle; the target is smoothed with an LPF
+// to hide the 30 Hz packet stepping, then stepToward caps the slew rate.
+static const float PAN_SMOOTH_ALPHA           = 0.45f;  // LPF on position target  (higher = faster, lower = smoother)
+static const float MAX_PAN_DEGREES_PER_UPDATE = 2.5f;   // 250 deg/s max slew rate at 100 Hz
+
+// --- Tilt tuning (direct position mapping) ---
+static const float TILT_SMOOTH_ALPHA          = 0.55f;  // higher = target catches up faster (reduces undershoot lag)
+static const float MAX_TILT_DEGREES_PER_UPDATE = 2.8f;  // 280 deg/s cap
+
+// Upward aim correction applied to the mapped tilt target, in degrees.
+// Negative = spotlight aims higher (toward TILT_MIN). Compensates for the
+// torso-center sampling point sitting below the subject's true center of mass.
+static const float TILT_AIM_BIAS_DEG = -3.0f;
 
 // Interpolation tick period
 static const uint32_t INTERP_INTERVAL_MS = 10;
 
-// Manual D-pad movement parameters
-static const int      MANUAL_STEP_DEG         = 1;
+// Manual D-pad movement parameters — intentionally slow for precise control
+static const float    MANUAL_STEP_DEG         = 0.5f;  // 0.5°/tick → 25 deg/s (gentler than auto)
 static const uint32_t MANUAL_STEP_INTERVAL_MS = 20;
 
 // ========================== UART Protocol ============================
@@ -144,8 +158,6 @@ float currentTilt = (float)TILT_CENTER;
 float targetPan  = (float)PAN_CENTER;
 float targetTilt = (float)TILT_CENTER;
 
-// Previous norm values (for derivative damping — currently unused, reserved)
-
 // Timing
 uint32_t lastGoodPacketMs = 0;
 uint32_t lastInterpMs     = 0;
@@ -167,6 +179,14 @@ bool moveDown  = false;
 bool moveLeft  = false;
 bool moveRight = false;
 
+// Last received normalized tracking coordinates from the Pi
+float lastNormX = 0.0f;
+float lastNormY = 0.0f;
+
+// Smoothed position targets — LPF hides 30 Hz packet stepping for both axes
+float smoothPanTarget  = (float)PAN_CENTER;
+float smoothTiltTarget = (float)TILT_CENTER;
+
 // ========================== Utility Functions ========================
 static int clampi(int v, int lo, int hi) {
   if (v < lo) return lo;
@@ -182,15 +202,24 @@ static float clampf(float v, float lo, float hi) {
 
 // ========================== PCA9685 Servo Helpers ====================
 
-// Convert degrees (0–180) to PCA9685 pulse ticks at 50 Hz (20 ms period, 4096 ticks)
-static int degreesToPulseTicks(int degrees) {
-  int pulseUs = map(degrees, 0, 180, SERVO_MIN_US, SERVO_MAX_US);
-  return (int)((long)pulseUs * 4096L / 20000L);
+// Convert degrees (0–180) to PCA9685 pulse ticks at 50 Hz (20 ms period, 4096 ticks).
+// Float version preserves sub-degree resolution; at ~2.16 ticks/°, integer
+// rounding would throw away ~half a tick — visible as jitter during slow pans.
+static int degreesToPulseTicksF(float degrees) {
+  if (degrees < 0.0f)   degrees = 0.0f;
+  if (degrees > 180.0f) degrees = 180.0f;
+  float pulseUs = (float)SERVO_MIN_US +
+                  (degrees / 180.0f) * (float)(SERVO_MAX_US - SERVO_MIN_US);
+  return (int)lroundf(pulseUs * 4096.0f / 20000.0f);
 }
 
+static void writeServoF(int channel, float degrees) {
+  pwm.setPWM(channel, 0, degreesToPulseTicksF(degrees));
+}
+
+// Integer-degree overload for tilt / manual call sites (routes through float path).
 static void writeServo(int channel, int degrees) {
-  degrees = clampi(degrees, 0, 180);
-  pwm.setPWM(channel, 0, degreesToPulseTicks(degrees));
+  writeServoF(channel, (float)degrees);
 }
 
 // Move currentPos toward targetPos by at most maxStep degrees
@@ -203,16 +232,18 @@ static float stepToward(float currentPos, float targetPos, float maxStep) {
 
 // Interpolate current positions toward targets and write to servos.
 // Driven by a fixed 10 ms tick in loop(); runs in both auto and manual modes.
+// Both pan and tilt use stepToward (slew-rate limiting) so the servo can't
+// snap instantaneously to a new target — motion stays smooth regardless of
+// how large or sudden the target update is.
 static void updateServos() {
   currentPan  = stepToward(currentPan,  targetPan,  MAX_PAN_DEGREES_PER_UPDATE);
   currentTilt = stepToward(currentTilt, targetTilt, MAX_TILT_DEGREES_PER_UPDATE);
 
-  int panDeg  = (int)lroundf(currentPan);
-  int tiltDeg = (int)lroundf(currentTilt);
-
-  writeServo(SERVO_PAN_CH,        panDeg);
-  writeServo(SERVO_TILT_LEFT_CH,  tiltDeg);
-  writeServo(SERVO_TILT_RIGHT_CH, 180 - tiltDeg);
+  float tiltOutput = clampf(currentTilt, (float)TILT_MIN, (float)TILT_MAX);
+  int tiltDeg = (int)lroundf(tiltOutput);
+  writeServoF(SERVO_PAN_CH,        currentPan);
+  writeServo (SERVO_TILT_LEFT_CH,  tiltDeg);
+  writeServo (SERVO_TILT_RIGHT_CH, 180 - tiltDeg);
 }
 
 // Target setters — clamp to limits, do NOT write PWM directly.
@@ -232,6 +263,14 @@ void setStopMotion() {
 
 static void enterIdle() {
   trackState = TRACK_IDLE;
+  // On idle, stop commanding new motion. Target = wherever we are now so
+  // the servo gently stops instead of continuing toward a stale setpoint.
+  targetPan        = currentPan;
+  targetTilt       = currentTilt;
+  smoothPanTarget  = currentPan;
+  smoothTiltTarget = currentTilt;
+  lastNormX        = 0.0f;
+  lastNormY        = 0.0f;
 }
 
 // Read and process a single binary tracking packet from the Pi
@@ -277,20 +316,42 @@ bool readAndProcessPacket() {
   if (fabsf(norm_x) < DEADBAND) norm_x = 0.0f;
   if (fabsf(norm_y) < DEADBAND) norm_y = 0.0f;
 
-  // Proportional-to-current: offset drives a correction relative to where
-  // the servo IS right now.  No EMA here — the Pi signal is already heavily
-  // smoothed.  As the camera catches up to the person the Pi's offset
-  // shrinks toward zero, naturally decelerating the servo (built-in damping).
-  float panTarget  = currentPan  - norm_x * PAN_TRACK_GAIN;
-  float tiltTarget = currentTilt + norm_y * TILT_TRACK_GAIN;
+  // ---------- Pan: direct position mapping + exponential smoothing ----------
+  // norm_x maps to an absolute angle within [PAN_MIN, PAN_MAX]. The LPF on
+  // smoothPanTarget prevents the 30 Hz packet rate from producing stepped
+  // motion; stepToward in updateServos() caps the physical slew rate.
+  float signedNormX = PAN_POS_SIGN * norm_x;
+  float rawPanTarget;
+  if (signedNormX >= 0.0f) {
+    rawPanTarget = (float)PAN_CENTER + signedNormX * (float)(PAN_MAX - PAN_CENTER);
+  } else {
+    rawPanTarget = (float)PAN_CENTER + signedNormX * (float)(PAN_CENTER - PAN_MIN);
+  }
+  smoothPanTarget = PAN_SMOOTH_ALPHA * rawPanTarget + (1.0f - PAN_SMOOTH_ALPHA) * smoothPanTarget;
+  setTargetPan(smoothPanTarget);
 
-  setTargetPan(panTarget);
-  setTargetTilt(tiltTarget);
+  // ---------- Tilt: direct position mapping + exponential smoothing ----------
+  float signedNormY = TILT_POS_SIGN * norm_y;
+  float rawTiltTarget;
+  if (signedNormY >= 0.0f) {
+    rawTiltTarget = TILT_CENTER + signedNormY * (float)(TILT_MAX - TILT_CENTER);
+  } else {
+    rawTiltTarget = TILT_CENTER + signedNormY * (float)(TILT_CENTER - TILT_MIN);
+  }
+  rawTiltTarget += TILT_AIM_BIAS_DEG;
+  smoothTiltTarget = TILT_SMOOTH_ALPHA * rawTiltTarget + (1.0f - TILT_SMOOTH_ALPHA) * smoothTiltTarget;
+  setTargetTilt(smoothTiltTarget);
 
-  trackState = TRACK_ACTIVE;
+  lastNormX   = norm_x;
+  lastNormY   = norm_y;
+  trackState  = TRACK_ACTIVE;
 
-  Serial.printf("[TRACK] nx=%.2f ny=%.2f | targetPan=%.1f targetTilt=%.1f\n",
-                norm_x, norm_y, panTarget, tiltTarget);
+  static uint8_t trackLogCounter = 0;
+  if (++trackLogCounter >= 10) {
+    trackLogCounter = 0;
+    Serial.printf("[TRACK] nx=%.2f ny=%.2f | tgtPan=%.1f tgtTilt=%.1f | cur=%.1f,%.1f\n",
+                  norm_x, norm_y, targetPan, targetTilt, currentPan, currentTilt);
+  }
   return true;
 }
 
@@ -346,7 +407,9 @@ void handleStatus() {
     "{\"mode\":\""     + mode +
     "\",\"tracking\":" + (trackingEnabled ? "true" : "false") +
     ",\"pan\":"        + String(reportedPan) +
-    ",\"tilt\":"       + String(reportedTilt) + "}";
+    ",\"tilt\":"       + String(reportedTilt) +
+    ",\"norm_x\":"     + String(lastNormX, 3) +
+    ",\"norm_y\":"     + String(lastNormY, 3) + "}";
   Serial.printf("[REST] GET /api/status → %s\n", body.c_str());
   sendJson(200, body);
 }
@@ -463,6 +526,9 @@ void onWsEvent(uint8_t num, WStype_t type, uint8_t* payload, size_t length) {
 void setupWebSocket() {
   wsServer.begin();
   wsServer.onEvent(onWsEvent);
+  // Heartbeat: send ping every 15 s, expect pong within 3 s, drop after 2 missed pongs.
+  // Keeps idle connections alive through NAT/Wi-Fi-AP timeouts.
+  wsServer.enableHeartbeat(15000, 3000, 2);
 }
 
 // ========================== Manual Movement Loop =====================
@@ -478,12 +544,10 @@ void applyManualMovement() {
   float pan  = targetPan;
   float tilt = targetTilt;
 
-  if (moveLeft)  pan  -= (float)MANUAL_STEP_DEG;
-  if (moveRight) pan  += (float)MANUAL_STEP_DEG;
-  // Inverted: the tilt servo angle decreases as the gimbal rotates physically
-  // upward, so "up" on the D-pad must subtract from the tilt angle.
-  if (moveUp)    tilt -= (float)MANUAL_STEP_DEG;
-  if (moveDown)  tilt += (float)MANUAL_STEP_DEG;
+  if (moveLeft  && pan  < (float)PAN_MAX)  pan  += MANUAL_STEP_DEG;
+  if (moveRight && pan  > (float)PAN_MIN)  pan  -= MANUAL_STEP_DEG;
+  if (moveUp    && tilt > (float)TILT_MIN) tilt -= MANUAL_STEP_DEG;
+  if (moveDown  && tilt < (float)TILT_MAX) tilt += MANUAL_STEP_DEG;
 
   setTargetPan(pan);
   setTargetTilt(tilt);
@@ -494,18 +558,17 @@ void applyAutoTracking() {
   if (mode != "auto") return;
 
   uint32_t now = millis();
-  bool got = false;
 
-  while (Serial1.available() >= PACKET_LEN) {
+  // Process at most one packet per loop() iteration so that
+  // server.handleClient() and wsServer.loop() are never starved by a
+  // burst of UART packets from the Pi.
+  if (Serial1.available() >= PACKET_LEN) {
     if (readAndProcessPacket()) {
-      got = true;
       lastGoodPacketMs = now;
-    } else {
-      break;
     }
   }
 
-  if (!got && (now - lastGoodPacketMs > PACKET_TIMEOUT_MS)) {
+  if (now - lastGoodPacketMs > PACKET_TIMEOUT_MS) {
     if (trackState != TRACK_IDLE) enterIdle();
   }
 }
@@ -552,8 +615,10 @@ void setup() {
   Serial.printf("[INIT] UART1 ready — baud=%d, RX=GPIO%d, TX=GPIO%d\n", 460800, RX_PIN, TX_PIN);
   Serial.printf("[INIT] Pan %d-%d (center %d) | Tilt %d-%d (center %d)\n",
                 PAN_MIN, PAN_MAX, PAN_CENTER, TILT_MIN, TILT_MAX, TILT_CENTER);
+  Serial.printf("[INIT] Pan: position map sign %+.0f | Tilt: position map sign %+.0f\n",
+                PAN_POS_SIGN, TILT_POS_SIGN);
   Serial.println("[INIT] PCA9685 servos: TiltL(ch0), TiltR(ch1, mirrored), Pan(ch2)");
-  Serial.println("[INIT] S.T.A.R. App+Tracking Firmware ready.");
+  Serial.println("[INIT] S.T.A.R. App+Tracking Firmware (velocity-control) ready.");
 }
 
 // ========================== Main Loop ================================

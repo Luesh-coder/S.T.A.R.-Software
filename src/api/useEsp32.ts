@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { makeWsUrl, POLL_INTERVAL_MS } from "./config";
 import { getStatus, newTarget, setLight, setMode, setTracking } from "./esp32";
 import { getSavedHost, saveHost } from "./storage";
@@ -25,7 +25,7 @@ export function useEsp32() {
 
   // ── WebSocket client ────────────────────────────────────────────────────────
 
-  const wsUrl = useMemo(() => makeWsUrl(host, "/ws/manual"), [host]);
+  const wsUrl = useMemo(() => makeWsUrl(host), [host]);
   const wsClient = useMemo(() => new ManualWsClient(wsUrl), [wsUrl]);
 
   useEffect(() => {
@@ -52,16 +52,33 @@ export function useEsp32() {
     setConnection("online");
   }, [host]);
 
-  // Auto-poll while the app is running
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
+  // Self-scheduling poll: next tick is queued only after the previous one
+  // resolves, so slow/timed-out polls can't overlap. Cleans up on host change
+  // or unmount without leaving stray intervals.
   useEffect(() => {
-    refresh(); // immediate first poll
-    pollRef.current = setInterval(refresh, POLL_INTERVAL_MS);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const tick = async () => {
+      if (cancelled) return;
+      const res = await getStatus(host);
+      if (cancelled) return;
+      if (isApiErr(res)) {
+        setConnection("offline");
+      } else {
+        setError(null);
+        setStatus(res);
+        setConnection("online");
+      }
+      timer = setTimeout(tick, POLL_INTERVAL_MS);
     };
-  }, [refresh]);
+
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [host]);
 
   // ── Host management ─────────────────────────────────────────────────────────
 

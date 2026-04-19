@@ -32,6 +32,18 @@ export function StatusInfo({ connection, status }: Props) {
           Tracking: {status?.tracking ? "ON" : "OFF"}
         </Text>
       </View>
+
+      {isConnected && status?.tracking && (
+        <View className="flex-row items-center gap-3">
+          <Text className="text-star-text text-sm opacity-50">
+            X: {status?.norm_x !== undefined ? status.norm_x.toFixed(3) : "—"}
+          </Text>
+          <Text className="text-star-text text-sm opacity-40">•</Text>
+          <Text className="text-star-text text-sm opacity-50">
+            Y: {status?.norm_y !== undefined ? status.norm_y.toFixed(3) : "—"}
+          </Text>
+        </View>
+      )}
     </View>
   );
 }

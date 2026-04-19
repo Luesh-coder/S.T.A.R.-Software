@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   SafeAreaView,
@@ -24,27 +25,46 @@ export default function ManualScreen() {
     wsMove,
     wsStop,
     apiSetMode,
+    apiSetTracking,
   } = useEsp32();
 
   const [controlActive, setControlActive] = useState(false);
+  const [trackingWasActive, setTrackingWasActive] = useState(false);
 
   useEffect(() => {
     wsConnect();
     return () => wsDisconnect();
   }, [wsConnect, wsDisconnect]);
 
+  useFocusEffect(
+    useCallback(() => {
+      if (connection === "online" && status?.mode !== "manual") {
+        apiSetMode("manual");
+      }
+    }, [connection, status?.mode, apiSetMode]),
+  );
+
   const compact = height < 860;
   const dPadIcon = compact ? 34 : 40;
   const dPadGap = compact ? 10 : 14;
   const hold = (dir: "up" | "down" | "left" | "right") => () => wsMove(dir);
 
-  const handleControlToggle = () => {
+  const handleControlToggle = async () => {
     if (!controlActive && connection !== "online") {
       Alert.alert("ESP32", "Not connected — please connect to STAR-ESP32 Wi-Fi");
       return;
     }
-    if (controlActive) {
+    if (!controlActive) {
+      const wasTracking = status?.tracking ?? false;
+      setTrackingWasActive(wasTracking);
+      if (wasTracking) {
+        await apiSetTracking(false);
+      }
+    } else {
       wsStop();
+      if (trackingWasActive) {
+        await apiSetTracking(true);
+      }
     }
     setControlActive((prev) => !prev);
   };
@@ -72,12 +92,13 @@ export default function ManualScreen() {
 
           {/* Auto */}
           <AnimatedButton
-            onPress={() => {
+            onPress={async () => {
               wsStop();
-              router.push("/");
-              if (connection === "online") {
-                apiSetMode("auto");
+              if (controlActive && trackingWasActive) {
+                await apiSetTracking(true);
               }
+              setControlActive(false);
+              router.push("/");
             }}
             className="h-12 w-full items-center justify-center rounded-pill bg-star-button"
           >

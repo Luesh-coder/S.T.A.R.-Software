@@ -6,6 +6,8 @@ export type StatusResponse = {
   mode: StarMode;
   tracking: boolean;
   light: boolean;
+  norm_x?: number;
+  norm_y?: number;
   // Future fields (uncomment as you implement on ESP32):
   // battery?: number;
   // rssi?: number;

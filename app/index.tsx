@@ -1,5 +1,6 @@
+import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
-import React, { useEffect } from "react";
+import React, { useCallback, useEffect } from "react";
 import {
   SafeAreaView,
   Text,
@@ -36,6 +37,14 @@ export default function Index() {
     refresh();
   }, [refresh]);
 
+  useFocusEffect(
+    useCallback(() => {
+      if (connection === "online" && status?.mode !== "auto") {
+        apiSetMode("auto");
+      }
+    }, [connection, status?.mode, apiSetMode]),
+  );
+
   const tracking = status?.tracking ?? false;
   const trackingLabel = tracking ? "Stop Tracking" : "Start Tracking";
 
@@ -52,12 +61,7 @@ export default function Index() {
     },
     {
       label: "Manual",
-      onPress: () => {
-        router.push("/manual");
-        if (connection === "online") {
-          apiSetMode("manual");
-        }
-      },
+      onPress: () => router.push("/manual"),
     },
   ];
 

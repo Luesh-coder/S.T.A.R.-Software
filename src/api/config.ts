@@ -20,9 +20,9 @@ export function makeBaseUrl(host: string): string {
   return `${HTTP_PROTOCOL}://${host}`;
 }
 
-export function makeWsUrl(host: string, path = "/ws/manual"): string {
+export function makeWsUrl(host: string): string {
   const scheme = HTTP_PROTOCOL === "https" ? "wss" : "ws";
-  return `${scheme}://${host}:${WS_PORT}${path}`;
+  return `${scheme}://${host}:${WS_PORT}/`;
 }
 
 // ─── Debug ────────────────────────────────────────────────────────────────────
