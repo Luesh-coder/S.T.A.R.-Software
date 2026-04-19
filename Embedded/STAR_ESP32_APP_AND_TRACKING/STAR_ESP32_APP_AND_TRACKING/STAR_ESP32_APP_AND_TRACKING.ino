@@ -72,9 +72,9 @@ static const int TX_PIN = 43;
 
 // ========================== Servo / Motion Limits ====================
 // Pan: restricted to 50–110°, center at 90°
-static const int PAN_MIN    = 85;
-static const int PAN_MAX    = 115;
-static const int PAN_CENTER = 100;
+static const int PAN_MIN    = 90;
+static const int PAN_MAX    = 120;
+static const int PAN_CENTER = 105;
 
 // Tilt: 135° = mechanically level. MIN=115 (up), MAX=155 (down), center=135 (level).
 static const int TILT_MIN    = 125;
@@ -93,8 +93,20 @@ static const float TILT_POS_SIGN = +1.0f;
 // --- Pan tuning (direct position mapping, same design as tilt) ---
 // norm_x maps to an absolute pan angle; the target is smoothed with an LPF
 // to hide the 30 Hz packet stepping, then stepToward caps the slew rate.
-static const float PAN_SMOOTH_ALPHA           = 0.45f;  // LPF on position target  (higher = faster, lower = smoother)
+static const float PAN_SMOOTH_ALPHA           = 0.55f;  // LPF on position target  (higher = faster, lower = smoother)
 static const float MAX_PAN_DEGREES_PER_UPDATE = 2.5f;   // 250 deg/s max slew rate at 100 Hz
+
+// Directional gain multipliers for pan. Applied independently per direction
+// so mechanical asymmetry can be compensated on either side.
+// 1.0 = no correction. Right currently lags so PAN_RIGHT_GAIN > 1.0.
+// Raise right to fix right-lag; raise left if left ever lags instead.
+static const float PAN_RIGHT_GAIN = 1.15f;  // signedNormX < 0 → toward PAN_MIN
+static const float PAN_LEFT_GAIN  = 1.15f;  // signedNormX > 0 → toward PAN_MAX
+
+// After a new-target tap, pan slew rate is reduced for this many ms so the
+// gimbal eases onto the new subject rather than snapping hard across frame.
+static const uint32_t PAN_SOFT_SLEW_DURATION_MS  = 800;
+static const float    MAX_PAN_DEG_SOFT_SLEW       = 1.0f;  // deg/update during soft window
 
 // --- Tilt tuning (direct position mapping) ---
 static const float TILT_SMOOTH_ALPHA          = 0.55f;  // higher = target catches up faster (reduces undershoot lag)
@@ -103,13 +115,20 @@ static const float MAX_TILT_DEGREES_PER_UPDATE = 2.8f;  // 280 deg/s cap
 // Upward aim correction applied to the mapped tilt target, in degrees.
 // Negative = spotlight aims higher (toward TILT_MIN). Compensates for the
 // torso-center sampling point sitting below the subject's true center of mass.
-static const float TILT_AIM_BIAS_DEG = -3.0f;
+static const float TILT_AIM_BIAS_DEG = 0.0f;
+
+// Directional gain multipliers for tilt. Applied independently per direction so
+// mechanical asymmetry (gravity loads the tilt servo harder upward) can be
+// compensated on either side. 1.0 = no correction.
+// Up currently undershoots so TILT_UP_GAIN > 1.0.
+static const float TILT_UP_GAIN   = 3.0f;  // signedNormY < 0 → toward TILT_MIN (up)
+static const float TILT_DOWN_GAIN = 1.0f;  // signedNormY > 0 → toward TILT_MAX (down)
 
 // Interpolation tick period
 static const uint32_t INTERP_INTERVAL_MS = 10;
 
 // Manual D-pad movement parameters — intentionally slow for precise control
-static const float    MANUAL_STEP_DEG         = 0.5f;  // 0.5°/tick → 25 deg/s (gentler than auto)
+static const float    MANUAL_STEP_DEG         = 0.25f;  // 0.5°/tick → 25 deg/s (gentler than auto)
 static const uint32_t MANUAL_STEP_INTERVAL_MS = 20;
 
 // ========================== UART Protocol ============================
@@ -179,6 +198,9 @@ bool moveDown  = false;
 bool moveLeft  = false;
 bool moveRight = false;
 
+// Timestamp of the last new-target request; 0 = no active soft-slew window
+uint32_t panSoftSlewUntilMs = 0;
+
 // Last received normalized tracking coordinates from the Pi
 float lastNormX = 0.0f;
 float lastNormY = 0.0f;
@@ -236,7 +258,8 @@ static float stepToward(float currentPos, float targetPos, float maxStep) {
 // snap instantaneously to a new target — motion stays smooth regardless of
 // how large or sudden the target update is.
 static void updateServos() {
-  currentPan  = stepToward(currentPan,  targetPan,  MAX_PAN_DEGREES_PER_UPDATE);
+  float panSlew = (millis() < panSoftSlewUntilMs) ? MAX_PAN_DEG_SOFT_SLEW : MAX_PAN_DEGREES_PER_UPDATE;
+  currentPan  = stepToward(currentPan,  targetPan,  panSlew);
   currentTilt = stepToward(currentTilt, targetTilt, MAX_TILT_DEGREES_PER_UPDATE);
 
   float tiltOutput = clampf(currentTilt, (float)TILT_MIN, (float)TILT_MAX);
@@ -323,9 +346,9 @@ bool readAndProcessPacket() {
   float signedNormX = PAN_POS_SIGN * norm_x;
   float rawPanTarget;
   if (signedNormX >= 0.0f) {
-    rawPanTarget = (float)PAN_CENTER + signedNormX * (float)(PAN_MAX - PAN_CENTER);
+    rawPanTarget = (float)PAN_CENTER + signedNormX * PAN_LEFT_GAIN * (float)(PAN_MAX - PAN_CENTER);
   } else {
-    rawPanTarget = (float)PAN_CENTER + signedNormX * (float)(PAN_CENTER - PAN_MIN);
+    rawPanTarget = (float)PAN_CENTER + signedNormX * PAN_RIGHT_GAIN * (float)(PAN_CENTER - PAN_MIN);
   }
   smoothPanTarget = PAN_SMOOTH_ALPHA * rawPanTarget + (1.0f - PAN_SMOOTH_ALPHA) * smoothPanTarget;
   setTargetPan(smoothPanTarget);
@@ -334,9 +357,9 @@ bool readAndProcessPacket() {
   float signedNormY = TILT_POS_SIGN * norm_y;
   float rawTiltTarget;
   if (signedNormY >= 0.0f) {
-    rawTiltTarget = TILT_CENTER + signedNormY * (float)(TILT_MAX - TILT_CENTER);
+    rawTiltTarget = (float)TILT_CENTER + signedNormY * TILT_DOWN_GAIN * (float)(TILT_MAX - TILT_CENTER);
   } else {
-    rawTiltTarget = TILT_CENTER + signedNormY * (float)(TILT_CENTER - TILT_MIN);
+    rawTiltTarget = (float)TILT_CENTER + signedNormY * TILT_UP_GAIN   * (float)(TILT_CENTER - TILT_MIN);
   }
   rawTiltTarget += TILT_AIM_BIAS_DEG;
   smoothTiltTarget = TILT_SMOOTH_ALPHA * rawTiltTarget + (1.0f - TILT_SMOOTH_ALPHA) * smoothTiltTarget;
@@ -457,6 +480,7 @@ void handleTracking() {
 void handleNewTarget() {
   Serial.println("[REST] POST /api/target/new -> new target requested");
   sendSwitchTargetPacket();
+  panSoftSlewUntilMs = millis() + PAN_SOFT_SLEW_DURATION_MS;
   sendJson(200, "{\"ok\":true}");
 }
 
