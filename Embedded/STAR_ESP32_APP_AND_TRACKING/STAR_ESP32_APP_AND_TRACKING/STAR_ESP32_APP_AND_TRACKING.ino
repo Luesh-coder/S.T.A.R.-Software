@@ -46,10 +46,11 @@ static const char* AP_PASS = "star12345";  // min 8 chars for WPA2
 
 // ========================== REST API Paths ===========================
 // Must match src/api/esp32.ts in the mobile app
-static const char* PATH_STATUS     = "/api/status";
-static const char* PATH_MODE       = "/api/mode";
-static const char* PATH_TRACKING   = "/api/tracking";
-static const char* PATH_NEW_TARGET = "/api/target/new";
+static const char* PATH_STATUS      = "/api/status";
+static const char* PATH_MODE        = "/api/mode";
+static const char* PATH_TRACKING    = "/api/tracking";
+static const char* PATH_NEW_TARGET  = "/api/target/new";
+static const char* PATH_CALIBRATION = "/api/calibration";
 
 WebServer        server(80);
 WebSocketsServer wsServer(81);
@@ -100,8 +101,8 @@ static const float MAX_PAN_DEGREES_PER_UPDATE = 2.5f;   // 250 deg/s max slew ra
 // so mechanical asymmetry can be compensated on either side.
 // 1.0 = no correction. Right currently lags so PAN_RIGHT_GAIN > 1.0.
 // Raise right to fix right-lag; raise left if left ever lags instead.
-static const float PAN_RIGHT_GAIN = 1.15f;  // signedNormX < 0 → toward PAN_MIN
-static const float PAN_LEFT_GAIN  = 1.15f;  // signedNormX > 0 → toward PAN_MAX
+static float PAN_RIGHT_GAIN = 1.0f;  // signedNormX < 0 → toward PAN_MIN
+static float PAN_LEFT_GAIN  = 1.0f;  // signedNormX > 0 → toward PAN_MAX
 
 // After a new-target tap, pan slew rate is reduced for this many ms so the
 // gimbal eases onto the new subject rather than snapping hard across frame.
@@ -121,8 +122,8 @@ static const float TILT_AIM_BIAS_DEG = 0.0f;
 // mechanical asymmetry (gravity loads the tilt servo harder upward) can be
 // compensated on either side. 1.0 = no correction.
 // Up currently undershoots so TILT_UP_GAIN > 1.0.
-static const float TILT_UP_GAIN   = 3.0f;  // signedNormY < 0 → toward TILT_MIN (up)
-static const float TILT_DOWN_GAIN = 1.0f;  // signedNormY > 0 → toward TILT_MAX (down)
+static float TILT_UP_GAIN   = 1.0f;  // signedNormY < 0 → toward TILT_MIN (up)
+static float TILT_DOWN_GAIN = 1.0f;  // signedNormY > 0 → toward TILT_MAX (down)
 
 // Interpolation tick period
 static const uint32_t INTERP_INTERVAL_MS = 10;
@@ -408,6 +409,31 @@ bool jsonGetMode(const String& body, String& out) {
   return true;
 }
 
+bool jsonGetFloat(const String& body, const char* key, float& out) {
+  String marker = String("\"") + key + "\"";
+  int keyPos = body.indexOf(marker);
+  if (keyPos < 0) return false;
+  int colon = body.indexOf(':', keyPos + marker.length());
+  if (colon < 0) return false;
+  int start = colon + 1;
+  while (start < (int)body.length() &&
+         (body[start] == ' ' || body[start] == '\r' ||
+          body[start] == '\n' || body[start] == '\t')) {
+    start++;
+  }
+  int end = start;
+  while (end < (int)body.length() &&
+         body[end] != ',' && body[end] != '}' && body[end] != ' ' &&
+         body[end] != '\r' && body[end] != '\n' && body[end] != '\t') {
+    end++;
+  }
+  String num = body.substring(start, end);
+  num.trim();
+  if (num.length() == 0) return false;
+  out = num.toFloat();
+  return true;
+}
+
 // ========================== HTTP Helpers ==============================
 void sendJson(int code, const String& body) {
   server.sendHeader("Access-Control-Allow-Origin",  "*");
@@ -427,12 +453,16 @@ void handleStatus() {
   int reportedPan  = (int)lroundf(currentPan);
   int reportedTilt = (int)lroundf(currentTilt);
   String body =
-    "{\"mode\":\""     + mode +
-    "\",\"tracking\":" + (trackingEnabled ? "true" : "false") +
-    ",\"pan\":"        + String(reportedPan) +
-    ",\"tilt\":"       + String(reportedTilt) +
-    ",\"norm_x\":"     + String(lastNormX, 3) +
-    ",\"norm_y\":"     + String(lastNormY, 3) + "}";
+    "{\"mode\":\""       + mode +
+    "\",\"tracking\":"   + (trackingEnabled ? "true" : "false") +
+    ",\"pan\":"          + String(reportedPan) +
+    ",\"tilt\":"         + String(reportedTilt) +
+    ",\"norm_x\":"       + String(lastNormX, 3) +
+    ",\"norm_y\":"       + String(lastNormY, 3) +
+    ",\"panLeftGain\":"  + String(PAN_LEFT_GAIN, 3) +
+    ",\"panRightGain\":" + String(PAN_RIGHT_GAIN, 3) +
+    ",\"tiltUpGain\":"   + String(TILT_UP_GAIN, 3) +
+    ",\"tiltDownGain\":" + String(TILT_DOWN_GAIN, 3) + "}";
   Serial.printf("[REST] GET /api/status → %s\n", body.c_str());
   sendJson(200, body);
 }
@@ -484,21 +514,44 @@ void handleNewTarget() {
   sendJson(200, "{\"ok\":true}");
 }
 
+// POST /api/calibration  body: { "panLeftGain":f, "panRightGain":f, "tiltUpGain":f, "tiltDownGain":f }
+// Any subset of keys is accepted; each value is clamped to [1.0, 3.0].
+// Gains are only consulted by auto-mode tracking, so changes are a no-op in manual.
+void handleCalibration() {
+  String body = readBody();
+  float v;
+  bool any = false;
+  if (jsonGetFloat(body, "panLeftGain",  v))  { PAN_LEFT_GAIN  = constrain(v, 1.0f, 3.0f); any = true; }
+  if (jsonGetFloat(body, "panRightGain", v))  { PAN_RIGHT_GAIN = constrain(v, 1.0f, 3.0f); any = true; }
+  if (jsonGetFloat(body, "tiltUpGain",   v))  { TILT_UP_GAIN   = constrain(v, 1.0f, 3.0f); any = true; }
+  if (jsonGetFloat(body, "tiltDownGain", v))  { TILT_DOWN_GAIN = constrain(v, 1.0f, 3.0f); any = true; }
+  if (!any) {
+    Serial.printf("[REST] POST /api/calibration — no valid keys: %s\n", body.c_str());
+    sendJson(400, "{\"ok\":false,\"error\":\"Expected at least one of panLeftGain|panRightGain|tiltUpGain|tiltDownGain\"}");
+    return;
+  }
+  Serial.printf("[REST] POST /api/calibration -> panL=%.3f panR=%.3f tiltU=%.3f tiltD=%.3f\n",
+                PAN_LEFT_GAIN, PAN_RIGHT_GAIN, TILT_UP_GAIN, TILT_DOWN_GAIN);
+  sendJson(200, "{\"ok\":true}");
+}
+
 void handleNotFound() {
   Serial.printf("[REST] 404 %s\n", server.uri().c_str());
   sendJson(404, "{\"ok\":false,\"error\":\"Not found\"}");
 }
 
 void setupRestApi() {
-  server.on(PATH_STATUS,     HTTP_GET,     handleStatus);
-  server.on(PATH_MODE,       HTTP_POST,    handleMode);
-  server.on(PATH_TRACKING,   HTTP_POST,    handleTracking);
-  server.on(PATH_NEW_TARGET, HTTP_POST,    handleNewTarget);
+  server.on(PATH_STATUS,      HTTP_GET,     handleStatus);
+  server.on(PATH_MODE,        HTTP_POST,    handleMode);
+  server.on(PATH_TRACKING,    HTTP_POST,    handleTracking);
+  server.on(PATH_NEW_TARGET,  HTTP_POST,    handleNewTarget);
+  server.on(PATH_CALIBRATION, HTTP_POST,    handleCalibration);
 
-  server.on(PATH_STATUS,     HTTP_OPTIONS, handleOptions);
-  server.on(PATH_MODE,       HTTP_OPTIONS, handleOptions);
-  server.on(PATH_TRACKING,   HTTP_OPTIONS, handleOptions);
-  server.on(PATH_NEW_TARGET, HTTP_OPTIONS, handleOptions);
+  server.on(PATH_STATUS,      HTTP_OPTIONS, handleOptions);
+  server.on(PATH_MODE,        HTTP_OPTIONS, handleOptions);
+  server.on(PATH_TRACKING,    HTTP_OPTIONS, handleOptions);
+  server.on(PATH_NEW_TARGET,  HTTP_OPTIONS, handleOptions);
+  server.on(PATH_CALIBRATION, HTTP_OPTIONS, handleOptions);
 
   server.onNotFound(handleNotFound);
   server.begin();

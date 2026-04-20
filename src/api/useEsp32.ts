@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { makeWsUrl, POLL_INTERVAL_MS } from "./config";
-import { getStatus, newTarget, setLight, setMode, setTracking } from "./esp32";
+import { getStatus, newTarget, setCalibration, setLight, setMode, setTracking } from "./esp32";
 import { getSavedHost, saveHost } from "./storage";
-import { ConnectionState, isApiErr, StarMode, StatusResponse } from "./types";
+import { CalibrationPayload, ConnectionState, isApiErr, StarMode, StatusResponse } from "./types";
 import { ManualWsClient, WsState } from "./ws";
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -117,6 +117,23 @@ export function useEsp32() {
     await refresh();
   }, [host, refresh]);
 
+  const apiSetCalibration = useCallback(
+    async (gains: CalibrationPayload) => {
+      console.log(
+        "[Calibrate] apply gains",
+        "panLeft=",  gains.panLeftGain,
+        "panRight=", gains.panRightGain,
+        "tiltUp=",   gains.tiltUpGain,
+        "tiltDown=", gains.tiltDownGain,
+      );
+      setError(null);
+      const res = await setCalibration(host, gains);
+      if (isApiErr(res)) { setError(res.error); return; }
+      await refresh();
+    },
+    [host, refresh],
+  );
+
   const apiToggleLight = useCallback(async () => {
     setError(null);
     const enabled = !(status?.light ?? false);
@@ -153,6 +170,7 @@ export function useEsp32() {
     apiSetTracking,
     apiNewTarget,
     apiToggleLight,
+    apiSetCalibration,
 
     // Manual mode (WebSocket)
     wsState,

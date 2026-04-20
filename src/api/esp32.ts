@@ -1,5 +1,5 @@
 import { httpJson } from "./http";
-import { ApiOk, ApiResult, StarMode, StatusResponse } from "./types";
+import { ApiOk, ApiResult, CalibrationPayload, StarMode, StatusResponse } from "./types";
 
 // ─── ESP32 REST Endpoints ─────────────────────────────────────────────────────
 //
@@ -7,11 +7,12 @@ import { ApiOk, ApiResult, StarMode, StatusResponse } from "./types";
 // All requests are JSON over HTTP on port 80.
 
 const PATHS = {
-  status:    "/api/status",    // GET  → StatusResponse
-  mode:      "/api/mode",      // POST { mode: "auto"|"manual" }
-  tracking:  "/api/tracking",  // POST { enabled: bool }
-  newTarget: "/api/target/new",// POST {}
-  light:     "/api/light",     // POST { enabled: bool }
+  status:      "/api/status",      // GET  → StatusResponse
+  mode:        "/api/mode",        // POST { mode: "auto"|"manual" }
+  tracking:    "/api/tracking",    // POST { enabled: bool }
+  newTarget:   "/api/target/new",  // POST {}
+  light:       "/api/light",       // POST { enabled: bool }
+  calibration: "/api/calibration", // POST CalibrationPayload
 } as const;
 
 // ─── API Functions ────────────────────────────────────────────────────────────
@@ -39,4 +40,9 @@ export function newTarget(host: string): Promise<ApiResult<ApiOk>> {
 /** Turn the spotlight on or off. */
 export function setLight(host: string, enabled: boolean): Promise<ApiResult<ApiOk>> {
   return httpJson<ApiOk>(host, PATHS.light, "POST", { enabled });
+}
+
+/** Update the four directional tracking gains. Only effective in auto mode. */
+export function setCalibration(host: string, gains: CalibrationPayload): Promise<ApiResult<ApiOk>> {
+  return httpJson<ApiOk>(host, PATHS.calibration, "POST", gains);
 }
