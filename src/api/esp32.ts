@@ -42,7 +42,7 @@ export function setLight(host: string, enabled: boolean): Promise<ApiResult<ApiO
   return httpJson<ApiOk>(host, PATHS.light, "POST", { enabled });
 }
 
-/** Update the four directional tracking gains. Only effective in auto mode. */
-export function setCalibration(host: string, gains: CalibrationPayload): Promise<ApiResult<ApiOk>> {
-  return httpJson<ApiOk>(host, PATHS.calibration, "POST", gains);
+/** Update the pan and tilt offsets in degrees. Only effective in auto mode. */
+export function setCalibration(host: string, payload: CalibrationPayload): Promise<ApiResult<ApiOk>> {
+  return httpJson<ApiOk>(host, PATHS.calibration, "POST", payload);
 }

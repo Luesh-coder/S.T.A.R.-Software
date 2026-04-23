@@ -8,10 +8,8 @@ export type StatusResponse = {
   light: boolean;
   norm_x?: number;
   norm_y?: number;
-  panLeftGain?: number;
-  panRightGain?: number;
-  tiltUpGain?: number;
-  tiltDownGain?: number;
+  panOffset?: number;
+  tiltOffset?: number;
   // Future fields (uncomment as you implement on ESP32):
   // battery?: number;
   // rssi?: number;
@@ -19,10 +17,8 @@ export type StatusResponse = {
 };
 
 export type CalibrationPayload = {
-  panLeftGain: number;
-  panRightGain: number;
-  tiltUpGain: number;
-  tiltDownGain: number;
+  panOffset: number;
+  tiltOffset: number;
 };
 
 // ─── API Response Wrappers ────────────────────────────────────────────────────

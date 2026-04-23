@@ -7,9 +7,12 @@ import { useEsp32 } from "../src/api/useEsp32";
 import { AnimatedButton } from "../src/components/AnimatedButton";
 import { StatusInfo } from "../src/components/StatusInfo";
 
-const MIN_GAIN = 1.0;
-const MAX_GAIN = 3.0;
-const STEP = 0.05;
+const PAN_RANGE  = 15;
+const TILT_RANGE = 10;
+const STEP       = 0.5;
+
+const formatDeg = (v: number) =>
+  `${v > 0 ? "+" : v < 0 ? "" : " "}${v.toFixed(1)}°`;
 
 export default function CalibrateScreen() {
   const router = useRouter();
@@ -21,10 +24,8 @@ export default function CalibrateScreen() {
     apiSetCalibration,
   } = useEsp32();
 
-  const [tiltUp,    setTiltUp]    = useState(1.0);
-  const [tiltDown,  setTiltDown]  = useState(1.0);
-  const [panLeft,   setPanLeft]   = useState(1.0);
-  const [panRight,  setPanRight]  = useState(1.0);
+  const [panOffset,  setPanOffset]  = useState(0);
+  const [tiltOffset, setTiltOffset] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
@@ -36,57 +37,36 @@ export default function CalibrateScreen() {
 
   useEffect(() => {
     if (!status) return;
-    if (status.tiltUpGain   !== undefined) setTiltUp(status.tiltUpGain);
-    if (status.tiltDownGain !== undefined) setTiltDown(status.tiltDownGain);
-    if (status.panLeftGain  !== undefined) setPanLeft(status.panLeftGain);
-    if (status.panRightGain !== undefined) setPanRight(status.panRightGain);
-  }, [
-    status?.tiltUpGain,
-    status?.tiltDownGain,
-    status?.panLeftGain,
-    status?.panRightGain,
-  ]);
-
-  const sendAll = (next: {
-    tiltUp: number; tiltDown: number; panLeft: number; panRight: number;
-  }) => {
-    apiSetCalibration({
-      tiltUpGain:   next.tiltUp,
-      tiltDownGain: next.tiltDown,
-      panLeftGain:  next.panLeft,
-      panRightGain: next.panRight,
-    });
-  };
+    if (status.panOffset  !== undefined) setPanOffset(status.panOffset);
+    if (status.tiltOffset !== undefined) setTiltOffset(status.tiltOffset);
+  }, [status?.panOffset, status?.tiltOffset]);
 
   const rows: {
     label: string;
     value: number;
+    range: number;
     set: (v: number) => void;
     onCommit: (v: number) => void;
   }[] = [
     {
-      label: "Tilt Up",
-      value: tiltUp,
-      set: setTiltUp,
-      onCommit: (v) => { setTiltUp(v);   sendAll({ tiltUp: v, tiltDown, panLeft, panRight }); },
+      label: "Pan",
+      value: panOffset,
+      range: PAN_RANGE,
+      set: setPanOffset,
+      onCommit: (v) => {
+        setPanOffset(v);
+        apiSetCalibration({ panOffset: v, tiltOffset });
+      },
     },
     {
-      label: "Tilt Down",
-      value: tiltDown,
-      set: setTiltDown,
-      onCommit: (v) => { setTiltDown(v); sendAll({ tiltUp, tiltDown: v, panLeft, panRight }); },
-    },
-    {
-      label: "Pan Left",
-      value: panLeft,
-      set: setPanLeft,
-      onCommit: (v) => { setPanLeft(v);  sendAll({ tiltUp, tiltDown, panLeft: v, panRight }); },
-    },
-    {
-      label: "Pan Right",
-      value: panRight,
-      set: setPanRight,
-      onCommit: (v) => { setPanRight(v); sendAll({ tiltUp, tiltDown, panLeft, panRight: v }); },
+      label: "Tilt",
+      value: tiltOffset,
+      range: TILT_RANGE,
+      set: setTiltOffset,
+      onCommit: (v) => {
+        setTiltOffset(v);
+        apiSetCalibration({ panOffset, tiltOffset: v });
+      },
     },
   ];
 
@@ -100,21 +80,21 @@ export default function CalibrateScreen() {
           <StatusInfo connection={connection} status={status} />
         </View>
 
-        <View className="w-full max-w-[520px] gap-5">
+        <View className="w-full max-w-[520px] gap-8">
           {rows.map((r) => (
             <View key={r.label} className="w-full">
               <View className="flex-row justify-between mb-1">
                 <Text className="text-star-text text-[16px]">{r.label}</Text>
-                <Text className="text-star-muted text-[16px]">{r.value.toFixed(2)}</Text>
+                <Text className="text-star-muted text-[16px]">{formatDeg(r.value)}</Text>
               </View>
               <Slider
-                minimumValue={MIN_GAIN}
-                maximumValue={MAX_GAIN}
+                minimumValue={-r.range}
+                maximumValue={+r.range}
                 step={STEP}
                 value={r.value}
                 onValueChange={r.set}
                 onSlidingComplete={r.onCommit}
-                minimumTrackTintColor="#6D7CFF"
+                minimumTrackTintColor="rgba(236,237,239,0.25)"
                 maximumTrackTintColor="rgba(236,237,239,0.25)"
                 thumbTintColor="#ECEDEF"
               />

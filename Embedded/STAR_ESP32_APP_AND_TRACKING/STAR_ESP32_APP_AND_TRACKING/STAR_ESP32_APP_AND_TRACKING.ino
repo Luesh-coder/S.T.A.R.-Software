@@ -97,12 +97,13 @@ static const float TILT_POS_SIGN = +1.0f;
 static const float PAN_SMOOTH_ALPHA           = 0.55f;  // LPF on position target  (higher = faster, lower = smoother)
 static const float MAX_PAN_DEGREES_PER_UPDATE = 2.5f;   // 250 deg/s max slew rate at 100 Hz
 
-// Directional gain multipliers for pan. Applied independently per direction
-// so mechanical asymmetry can be compensated on either side.
-// 1.0 = no correction. Right currently lags so PAN_RIGHT_GAIN > 1.0.
-// Raise right to fix right-lag; raise left if left ever lags instead.
-static float PAN_RIGHT_GAIN = 1.0f;  // signedNormX < 0 → toward PAN_MIN
-static float PAN_LEFT_GAIN  = 1.0f;  // signedNormX > 0 → toward PAN_MAX
+// Aim offsets in degrees. Positive offset subtracts from servo angle
+// (pan → toward PAN_MIN/right; tilt → toward TILT_MIN/up).
+// Negative offset adds to the servo angle (pan → toward PAN_MAX/left;
+// tilt → toward TILT_MAX/down). Clamped to the mechanical half-range
+// so the offset alone cannot drive the servo past its limits.
+static float PAN_OFFSET_DEG  = 0.0f;
+static const float PAN_OFFSET_MAX_DEG  = 15.0f;  // = PAN_MAX - PAN_CENTER = PAN_CENTER - PAN_MIN
 
 // After a new-target tap, pan slew rate is reduced for this many ms so the
 // gimbal eases onto the new subject rather than snapping hard across frame.
@@ -118,12 +119,8 @@ static const float MAX_TILT_DEGREES_PER_UPDATE = 2.8f;  // 280 deg/s cap
 // torso-center sampling point sitting below the subject's true center of mass.
 static const float TILT_AIM_BIAS_DEG = 0.0f;
 
-// Directional gain multipliers for tilt. Applied independently per direction so
-// mechanical asymmetry (gravity loads the tilt servo harder upward) can be
-// compensated on either side. 1.0 = no correction.
-// Up currently undershoots so TILT_UP_GAIN > 1.0.
-static float TILT_UP_GAIN   = 1.0f;  // signedNormY < 0 → toward TILT_MIN (up)
-static float TILT_DOWN_GAIN = 1.0f;  // signedNormY > 0 → toward TILT_MAX (down)
+static float TILT_OFFSET_DEG = 0.0f;
+static const float TILT_OFFSET_MAX_DEG = 10.0f;  // = TILT_MAX - TILT_CENTER = TILT_CENTER - TILT_MIN
 
 // Interpolation tick period
 static const uint32_t INTERP_INTERVAL_MS = 10;
@@ -340,28 +337,30 @@ bool readAndProcessPacket() {
   if (fabsf(norm_x) < DEADBAND) norm_x = 0.0f;
   if (fabsf(norm_y) < DEADBAND) norm_y = 0.0f;
 
-  // ---------- Pan: direct position mapping + exponential smoothing ----------
-  // norm_x maps to an absolute angle within [PAN_MIN, PAN_MAX]. The LPF on
-  // smoothPanTarget prevents the 30 Hz packet rate from producing stepped
-  // motion; stepToward in updateServos() caps the physical slew rate.
+  // ---------- Pan: direct position mapping + offset + smoothing ----------
+  // norm_x maps to an absolute angle within [PAN_MIN, PAN_MAX]. PAN_OFFSET_DEG
+  // biases the resting aim. The LPF on smoothPanTarget hides 30 Hz packet
+  // stepping; setTargetPan clamps; stepToward in updateServos() caps slew rate.
   float signedNormX = PAN_POS_SIGN * norm_x;
   float rawPanTarget;
   if (signedNormX >= 0.0f) {
-    rawPanTarget = (float)PAN_CENTER + signedNormX * PAN_LEFT_GAIN * (float)(PAN_MAX - PAN_CENTER);
+    rawPanTarget = (float)PAN_CENTER + signedNormX * (float)(PAN_MAX - PAN_CENTER);
   } else {
-    rawPanTarget = (float)PAN_CENTER + signedNormX * PAN_RIGHT_GAIN * (float)(PAN_CENTER - PAN_MIN);
+    rawPanTarget = (float)PAN_CENTER + signedNormX * (float)(PAN_CENTER - PAN_MIN);
   }
+  rawPanTarget -= PAN_OFFSET_DEG;
   smoothPanTarget = PAN_SMOOTH_ALPHA * rawPanTarget + (1.0f - PAN_SMOOTH_ALPHA) * smoothPanTarget;
   setTargetPan(smoothPanTarget);
 
-  // ---------- Tilt: direct position mapping + exponential smoothing ----------
+  // ---------- Tilt: direct position mapping + offset + smoothing ----------
   float signedNormY = TILT_POS_SIGN * norm_y;
   float rawTiltTarget;
   if (signedNormY >= 0.0f) {
-    rawTiltTarget = (float)TILT_CENTER + signedNormY * TILT_DOWN_GAIN * (float)(TILT_MAX - TILT_CENTER);
+    rawTiltTarget = (float)TILT_CENTER + signedNormY * (float)(TILT_MAX - TILT_CENTER);
   } else {
-    rawTiltTarget = (float)TILT_CENTER + signedNormY * TILT_UP_GAIN   * (float)(TILT_CENTER - TILT_MIN);
+    rawTiltTarget = (float)TILT_CENTER + signedNormY * (float)(TILT_CENTER - TILT_MIN);
   }
+  rawTiltTarget -= TILT_OFFSET_DEG;
   rawTiltTarget += TILT_AIM_BIAS_DEG;
   smoothTiltTarget = TILT_SMOOTH_ALPHA * rawTiltTarget + (1.0f - TILT_SMOOTH_ALPHA) * smoothTiltTarget;
   setTargetTilt(smoothTiltTarget);
@@ -459,10 +458,8 @@ void handleStatus() {
     ",\"tilt\":"         + String(reportedTilt) +
     ",\"norm_x\":"       + String(lastNormX, 3) +
     ",\"norm_y\":"       + String(lastNormY, 3) +
-    ",\"panLeftGain\":"  + String(PAN_LEFT_GAIN, 3) +
-    ",\"panRightGain\":" + String(PAN_RIGHT_GAIN, 3) +
-    ",\"tiltUpGain\":"   + String(TILT_UP_GAIN, 3) +
-    ",\"tiltDownGain\":" + String(TILT_DOWN_GAIN, 3) + "}";
+    ",\"panOffset\":"  + String(PAN_OFFSET_DEG,  2) +
+    ",\"tiltOffset\":" + String(TILT_OFFSET_DEG, 2) + "}";
   Serial.printf("[REST] GET /api/status → %s\n", body.c_str());
   sendJson(200, body);
 }
@@ -514,24 +511,28 @@ void handleNewTarget() {
   sendJson(200, "{\"ok\":true}");
 }
 
-// POST /api/calibration  body: { "panLeftGain":f, "panRightGain":f, "tiltUpGain":f, "tiltDownGain":f }
-// Any subset of keys is accepted; each value is clamped to [1.0, 3.0].
-// Gains are only consulted by auto-mode tracking, so changes are a no-op in manual.
+// POST /api/calibration  body: { "panOffset": f, "tiltOffset": f }
+// Either key is optional; values are in degrees and clamped to the
+// mechanical half-range of each axis. Only consulted by auto-mode tracking.
 void handleCalibration() {
   String body = readBody();
   float v;
   bool any = false;
-  if (jsonGetFloat(body, "panLeftGain",  v))  { PAN_LEFT_GAIN  = constrain(v, 1.0f, 3.0f); any = true; }
-  if (jsonGetFloat(body, "panRightGain", v))  { PAN_RIGHT_GAIN = constrain(v, 1.0f, 3.0f); any = true; }
-  if (jsonGetFloat(body, "tiltUpGain",   v))  { TILT_UP_GAIN   = constrain(v, 1.0f, 3.0f); any = true; }
-  if (jsonGetFloat(body, "tiltDownGain", v))  { TILT_DOWN_GAIN = constrain(v, 1.0f, 3.0f); any = true; }
+  if (jsonGetFloat(body, "panOffset",  v)) {
+    PAN_OFFSET_DEG  = constrain(v, -PAN_OFFSET_MAX_DEG,  PAN_OFFSET_MAX_DEG);
+    any = true;
+  }
+  if (jsonGetFloat(body, "tiltOffset", v)) {
+    TILT_OFFSET_DEG = constrain(v, -TILT_OFFSET_MAX_DEG, TILT_OFFSET_MAX_DEG);
+    any = true;
+  }
   if (!any) {
     Serial.printf("[REST] POST /api/calibration — no valid keys: %s\n", body.c_str());
-    sendJson(400, "{\"ok\":false,\"error\":\"Expected at least one of panLeftGain|panRightGain|tiltUpGain|tiltDownGain\"}");
+    sendJson(400, "{\"ok\":false,\"error\":\"Expected at least one of panOffset|tiltOffset\"}");
     return;
   }
-  Serial.printf("[REST] POST /api/calibration -> panL=%.3f panR=%.3f tiltU=%.3f tiltD=%.3f\n",
-                PAN_LEFT_GAIN, PAN_RIGHT_GAIN, TILT_UP_GAIN, TILT_DOWN_GAIN);
+  Serial.printf("[REST] POST /api/calibration -> panOffset=%.2f tiltOffset=%.2f\n",
+                PAN_OFFSET_DEG, TILT_OFFSET_DEG);
   sendJson(200, "{\"ok\":true}");
 }
 

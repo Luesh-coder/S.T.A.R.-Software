@@ -118,16 +118,14 @@ export function useEsp32() {
   }, [host, refresh]);
 
   const apiSetCalibration = useCallback(
-    async (gains: CalibrationPayload) => {
+    async (payload: CalibrationPayload) => {
       console.log(
-        "[Calibrate] apply gains",
-        "panLeft=",  gains.panLeftGain,
-        "panRight=", gains.panRightGain,
-        "tiltUp=",   gains.tiltUpGain,
-        "tiltDown=", gains.tiltDownGain,
+        "[Calibrate] apply offset",
+        "pan=",  payload.panOffset,
+        "tilt=", payload.tiltOffset,
       );
       setError(null);
-      const res = await setCalibration(host, gains);
+      const res = await setCalibration(host, payload);
       if (isApiErr(res)) { setError(res.error); return; }
       await refresh();
     },
