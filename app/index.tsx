@@ -60,6 +60,12 @@ export default function Index() {
       dimmed: !tracking,
     },
     {
+      label: "Calibrate",
+      onPress: () => router.push("/calibrate"),
+      disabled: connection !== "online",
+      dimmed:   connection !== "online",
+    },
+    {
       label: "Manual",
       onPress: () => router.push("/manual"),
     },
