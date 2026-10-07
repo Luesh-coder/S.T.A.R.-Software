@@ -24,7 +24,8 @@ S.T.A.R. is a two-axis motorized gimbal that autonomously tracks a person in fra
 S.T.A.R.-Software/
 ├── app/                    # Expo Router screens
 │   ├── index.tsx           # Main screen (auto tracking controls)
-│   └── manual.tsx          # Manual D-pad control screen
+│   ├── manual.tsx          # Manual D-pad control screen
+│   └── calibrate.tsx       # Gain calibration screen (sliders)
 ├── src/
 │   ├── api/                # ESP32 communication layer (HTTP + WebSocket)
 │   └── components/         # Shared UI components
@@ -45,15 +46,29 @@ The Raspberry Pi runs `starOptimizedv3.py`, which uses a YOLO model to detect pe
 
 The mobile app connects to the ESP32's WebSocket server (port 81). Holding a D-pad button streams directional commands to the ESP32, which moves the pan/tilt servos in small increments in real time.
 
+### Calibration Mode
+
+The Calibrate screen (accessible from the home screen when connected) exposes four directional tracking gain sliders:
+
+| Slider    | Firmware variable | Range   |
+| --------- | ----------------- | ------- |
+| Tilt Up   | `TILT_UP_GAIN`    | 1.0–3.0 |
+| Tilt Down | `TILT_DOWN_GAIN`  | 1.0–3.0 |
+| Pan Left  | `PAN_LEFT_GAIN`   | 1.0–3.0 |
+| Pan Right | `PAN_RIGHT_GAIN`  | 1.0–3.0 |
+
+Adjusting a slider POSTs all four gains to `/api/calibration`. Gains only take effect while the system is in auto tracking mode. They allow fine-tuning of servo response speed per direction to compensate for gimbal mounting position.
+
 ### REST API (ESP32 — port 80)
 
-| Endpoint          | Method | Description                                           |
-| ----------------- | ------ | ----------------------------------------------------- |
-| `/api/status`     | GET    | Returns current mode, tracking state, and light state |
-| `/api/mode`       | POST   | Switch between `"auto"` and `"manual"`                |
-| `/api/tracking`   | POST   | Enable or disable the tracking algorithm              |
-| `/api/target/new` | POST   | Lock onto a new target in frame                       |
-| `/api/light`      | POST   | Toggle the spotlight                                  |
+| Endpoint           | Method | Description                                                        |
+| ------------------ | ------ | ------------------------------------------------------------------ |
+| `/api/status`      | GET    | Returns current mode, tracking state, light state, and gain values |
+| `/api/mode`        | POST   | Switch between `"auto"` and `"manual"`                             |
+| `/api/tracking`    | POST   | Enable or disable the tracking algorithm                           |
+| `/api/target/new`  | POST   | Lock onto a new target in frame                                    |
+| `/api/light`       | POST   | Toggle the spotlight                                               |
+| `/api/calibration` | POST   | Set directional tracking gains (range 1.0-3.0)                     |
 
 ## Hardware
 
@@ -83,8 +98,8 @@ Two system-level tests were run on the finished prototype: detection confidence 
 
 ### Summary
 
-| Specification        | Target                            | Measured (avg of 10 trials)   | Status                        |
-| -------------------- | --------------------------------- | ----------------------------- | ----------------------------- |
+| Specification        | Target                            | Measured (avg of 10 trials)   | Status                         |
+| -------------------- | --------------------------------- | ----------------------------- | ------------------------------ |
 | Detection Confidence | > 70% on first detection          | **76.2%** (min 71%, max 83%)  | ✅ Met in all 10 trials        |
 | Tracking Latency     | 500 ms (basic), 300 ms (advanced) | **396.2 ms** (best 275.22 ms) | ✅ Basic target met on average |
 
@@ -94,16 +109,16 @@ The YOLO person detector was run on live camera input under representative light
 
 | Trial   | Detected | Confidence |
 | ------- | -------- | ---------- |
-| 1       | ✅        | 0.82       |
-| 2       | ✅        | 0.71       |
-| 3       | ✅        | 0.80       |
-| 4       | ✅        | 0.73       |
-| 5       | ✅        | 0.79       |
-| 6       | ✅        | 0.73       |
-| 7       | ✅        | 0.73       |
-| 8       | ✅        | 0.83       |
-| 9       | ✅        | 0.72       |
-| 10      | ✅        | 0.76       |
+| 1       | ✅       | 0.82       |
+| 2       | ✅       | 0.71       |
+| 3       | ✅       | 0.80       |
+| 4       | ✅       | 0.73       |
+| 5       | ✅       | 0.79       |
+| 6       | ✅       | 0.73       |
+| 7       | ✅       | 0.73       |
+| 8       | ✅       | 0.83       |
+| 9       | ✅       | 0.72       |
+| 10      | ✅       | 0.76       |
 | **Avg** |          | **0.762**  |
 
 ![Confidence score on first instance](results/Confidence%20Score%20Recorded%20Results.png)
